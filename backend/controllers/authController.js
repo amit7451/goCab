@@ -2,6 +2,8 @@ const jwt = require('jsonwebtoken');
 const User = require('../models/User');
 const Driver = require('../models/Driver');
 
+const ALLOWED_RIDE_CATEGORIES = ['economy', 'comfort', 'premium'];
+
 const generateToken = (id) => {
   return jwt.sign({ id }, process.env.JWT_SECRET, {
     expiresIn: process.env.JWT_EXPIRES_IN || '7d',
@@ -40,9 +42,23 @@ const register = async (req, res) => {
         });
       }
 
+      const categories = Array.isArray(vehicleInfo.categories)
+        ? vehicleInfo.categories.filter((category) => ALLOWED_RIDE_CATEGORIES.includes(category))
+        : [];
+
+      if (!categories.length) {
+        await User.findByIdAndDelete(user._id);
+        return res.status(400).json({
+          message: 'Select at least one service category (economy/comfort/premium)',
+        });
+      }
+
       await Driver.create({
         userId: user._id,
-        vehicleInfo,
+        vehicleInfo: {
+          ...vehicleInfo,
+          categories,
+        },
         licenseNumber,
       });
     }

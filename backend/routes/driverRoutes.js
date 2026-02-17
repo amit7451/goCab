@@ -6,6 +6,7 @@ const {
   updateLocation,
   getAvailableRides,
   acceptRide,
+  verifyPickupOtp,
   updateRideStatus,
   getDriverRides,
 } = require('../controllers/driverController');
@@ -16,6 +17,7 @@ router.put('/availability', protect, requireRole('driver'), updateAvailability);
 router.put('/location', protect, requireRole('driver'), updateLocation);
 router.get('/available-rides', protect, requireRole('driver'), getAvailableRides);
 router.put('/accept-ride/:rideId', protect, requireRole('driver'), acceptRide);
+router.put('/verify-pickup-otp/:rideId', protect, requireRole('driver'), verifyPickupOtp);
 router.put('/update-ride/:rideId', protect, requireRole('driver'), updateRideStatus);
 router.get('/my-rides', protect, requireRole('driver'), getDriverRides);
 

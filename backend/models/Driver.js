@@ -1,5 +1,7 @@
 const mongoose = require('mongoose');
 
+const DRIVER_CATEGORIES = ['economy', 'comfort', 'premium'];
+
 const driverSchema = new mongoose.Schema(
   {
     userId: {
@@ -14,6 +16,11 @@ const driverSchema = new mongoose.Schema(
       year: { type: Number, required: true },
       licensePlate: { type: String, required: true, uppercase: true, trim: true },
       color: { type: String, required: true, trim: true },
+      categories: {
+        type: [String],
+        enum: DRIVER_CATEGORIES,
+        default: ['economy'],
+      },
     },
     licenseNumber: {
       type: String,

@@ -1,4 +1,5 @@
 const mongoose = require('mongoose');
+const { getFareBreakdown } = require('../utils/pricing');
 
 const rideSchema = new mongoose.Schema(
   {
@@ -35,6 +36,62 @@ const rideSchema = new mongoose.Schema(
       type: Number, // in km
       default: 0,
     },
+    estimatedDuration: {
+      type: Number, // in minutes
+      default: 0,
+    },
+    userPriceAddon: {
+      type: Number,
+      default: 0,
+      min: 0,
+    },
+    trafficMultiplier: {
+      type: Number,
+      default: 1,
+    },
+    fareBreakdown: {
+      baseFare: { type: Number, default: 0 },
+      distanceFare: { type: Number, default: 0 },
+      timeFare: { type: Number, default: 0 },
+      trafficCharge: { type: Number, default: 0 },
+      trafficMultiplier: { type: Number, default: 1 },
+      subtotal: { type: Number, default: 0 },
+      userPriceAddon: { type: Number, default: 0 },
+    },
+    requestExpiresAt: {
+      type: Date,
+      default: null,
+    },
+    acceptedAt: {
+      type: Date,
+      default: null,
+    },
+    cancelledAt: {
+      type: Date,
+      default: null,
+    },
+    cancelledReason: {
+      type: String,
+      default: '',
+    },
+    userLiveLocation: {
+      address: { type: String, default: '' },
+      lat: { type: Number, default: 0 },
+      lng: { type: Number, default: 0 },
+      updatedAt: { type: Date, default: null },
+    },
+    pickupOtp: {
+      type: String,
+      default: '',
+    },
+    pickupOtpGeneratedAt: {
+      type: Date,
+      default: null,
+    },
+    pickupOtpVerifiedAt: {
+      type: Date,
+      default: null,
+    },
     rideType: {
       type: String,
       enum: ['economy', 'comfort', 'premium'],
@@ -57,13 +114,30 @@ const rideSchema = new mongoose.Schema(
   { timestamps: true }
 );
 
+rideSchema.index({ status: 1, driverId: 1, requestExpiresAt: 1, rideType: 1 });
+
 // Fare calculation helper (called before saving)
 rideSchema.methods.calculateFare = function () {
-  const ratePerKm = { economy: 12, comfort: 18, premium: 25 };
-  const baseFare = { economy: 30, comfort: 50, premium: 80 };
-  const rate = ratePerKm[this.rideType] || 12;
-  const base = baseFare[this.rideType] || 30;
-  this.fare = base + this.distance * rate;
+  const breakdown = getFareBreakdown({
+    rideType: this.rideType,
+    distanceKm: this.distance,
+    durationMin: this.estimatedDuration,
+    userPriceAddon: this.userPriceAddon,
+  });
+
+  this.distance = breakdown.distanceKm;
+  this.estimatedDuration = breakdown.durationMin;
+  this.trafficMultiplier = breakdown.trafficMultiplier;
+  this.fareBreakdown = {
+    baseFare: breakdown.baseFare,
+    distanceFare: breakdown.distanceFare,
+    timeFare: breakdown.timeFare,
+    trafficCharge: breakdown.trafficCharge,
+    trafficMultiplier: breakdown.trafficMultiplier,
+    subtotal: breakdown.subtotal,
+    userPriceAddon: breakdown.userPriceAddon,
+  };
+  this.fare = breakdown.total;
   return this.fare;
 };
 

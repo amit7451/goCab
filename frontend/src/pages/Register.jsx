@@ -5,6 +5,11 @@ import toast from 'react-hot-toast';
 
 const INITIAL_USER = { name: '', email: '', password: '', phone: '' };
 const INITIAL_VEHICLE = { make: '', model: '', year: '', color: '', licensePlate: '' };
+const CATEGORY_OPTIONS = [
+  { id: 'economy', label: 'Economy' },
+  { id: 'comfort', label: 'Comfort' },
+  { id: 'premium', label: 'Premium' },
+];
 
 export default function Register() {
   const { register, isAuthenticated } = useAuth();
@@ -14,6 +19,7 @@ export default function Register() {
   const [role, setRole] = useState(searchParams.get('role') === 'driver' ? 'driver' : 'user');
   const [form, setForm] = useState(INITIAL_USER);
   const [vehicle, setVehicle] = useState(INITIAL_VEHICLE);
+  const [serviceCategories, setServiceCategories] = useState(['economy']);
   const [licenseNumber, setLicenseNumber] = useState('');
   const [loading, setLoading] = useState(false);
 
@@ -55,6 +61,10 @@ export default function Register() {
         toast.error('Please fill in all vehicle details');
         return;
       }
+      if (!serviceCategories.length) {
+        toast.error('Select at least one service category');
+        return;
+      }
       if (!licenseNumber) {
         toast.error('License number is required');
         return;
@@ -65,7 +75,11 @@ export default function Register() {
       ...form,
       role,
       ...(role === 'driver' && {
-        vehicleInfo: { ...vehicle, year: parseInt(vehicle.year) },
+        vehicleInfo: {
+          ...vehicle,
+          year: parseInt(vehicle.year),
+          categories: serviceCategories,
+        },
         licenseNumber,
       }),
     };
@@ -253,6 +267,38 @@ export default function Register() {
                     value={licenseNumber}
                     onChange={(e) => setLicenseNumber(e.target.value)}
                   />
+                </div>
+              </div>
+
+              <div className="form-group">
+                <label className="form-label">Service Categories</label>
+                <div style={{ display: 'flex', gap: 10, flexWrap: 'wrap' }}>
+                  {CATEGORY_OPTIONS.map((category) => {
+                    const checked = serviceCategories.includes(category.id);
+                    return (
+                      <button
+                        key={category.id}
+                        type="button"
+                        className="btn btn-sm"
+                        onClick={() => {
+                          setServiceCategories((prev) => {
+                            if (prev.includes(category.id)) {
+                              if (prev.length === 1) return prev;
+                              return prev.filter((id) => id !== category.id);
+                            }
+                            return [...prev, category.id];
+                          });
+                        }}
+                        style={{
+                          background: checked ? 'var(--amber-glow)' : 'var(--bg-elevated)',
+                          border: `1.5px solid ${checked ? 'var(--amber)' : 'var(--border)'}`,
+                          color: checked ? 'var(--amber)' : 'var(--text-secondary)',
+                        }}
+                      >
+                        {category.label}
+                      </button>
+                    );
+                  })}
                 </div>
               </div>
             </>

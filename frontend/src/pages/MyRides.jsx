@@ -1,5 +1,5 @@
 import { useState, useEffect, useCallback, useMemo, useRef } from 'react';
-import { Link } from 'react-router-dom';
+import { Link, useNavigate } from 'react-router-dom';
 import API from '../api/axios';
 import RideCard from '../components/RideCard';
 import toast from 'react-hot-toast';
@@ -7,6 +7,7 @@ import toast from 'react-hot-toast';
 const STATUS_FILTERS = ['all', 'requested', 'accepted', 'in_progress', 'completed', 'cancelled'];
 
 export default function MyRides() {
+  const navigate = useNavigate();
   const [rides, setRides] = useState([]);
   const [loading, setLoading] = useState(true);
   const [filter, setFilter] = useState('all');
@@ -115,6 +116,14 @@ export default function MyRides() {
             <span style={{ color: 'var(--success)', fontSize: 14 }}>
               Active ride updates are synced every few seconds. Waiting rides auto-cancel after 5 minutes.
             </span>
+            <button
+              type="button"
+              className="btn btn-secondary btn-sm"
+              style={{ marginLeft: 12 }}
+              onClick={() => navigate('/current-ride')}
+            >
+              Open Current Ride
+            </button>
           </div>
         )}
 

@@ -8,6 +8,8 @@ import Register from './pages/Register';
 import BookRide from './pages/BookRide';
 import MyRides from './pages/MyRides';
 import DriverDashboard from './pages/DriverDashboard';
+import UserCurrentRide from './pages/UserCurrentRide';
+import DriverCurrentRide from './pages/DriverCurrentRide';
 
 export default function App() {
   const { loading } = useAuth();
@@ -49,6 +51,14 @@ export default function App() {
             </ProtectedRoute>
           }
         />
+        <Route
+          path="/current-ride"
+          element={
+            <ProtectedRoute requiredRole="user">
+              <UserCurrentRide />
+            </ProtectedRoute>
+          }
+        />
 
         {/* Driver-only routes */}
         <Route
@@ -56,6 +66,14 @@ export default function App() {
           element={
             <ProtectedRoute requiredRole="driver">
               <DriverDashboard />
+            </ProtectedRoute>
+          }
+        />
+        <Route
+          path="/driver/current-ride"
+          element={
+            <ProtectedRoute requiredRole="driver">
+              <DriverCurrentRide />
             </ProtectedRoute>
           }
         />

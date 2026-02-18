@@ -37,16 +37,30 @@ export default function Navbar() {
               >
                 My Rides
               </NavLink>
+              <NavLink
+                to="/current-ride"
+                style={({ isActive }) => ({ ...styles.link, ...(isActive ? styles.linkActive : {}) })}
+              >
+                Current Ride
+              </NavLink>
             </>
           )}
 
           {isAuthenticated && isDriver && (
-            <NavLink
-              to="/driver"
-              style={({ isActive }) => ({ ...styles.link, ...(isActive ? styles.linkActive : {}) })}
-            >
-              Dashboard
-            </NavLink>
+            <>
+              <NavLink
+                to="/driver"
+                style={({ isActive }) => ({ ...styles.link, ...(isActive ? styles.linkActive : {}) })}
+              >
+                Dashboard
+              </NavLink>
+              <NavLink
+                to="/driver/current-ride"
+                style={({ isActive }) => ({ ...styles.link, ...(isActive ? styles.linkActive : {}) })}
+              >
+                Current Ride
+              </NavLink>
+            </>
           )}
         </div>
 

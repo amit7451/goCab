@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { useNavigate } from 'react-router-dom';
 import toast from 'react-hot-toast';
 import API from '../api/axios';
 import { useAuth } from '../context/AuthContext';
@@ -20,6 +21,7 @@ const formatCountdown = (seconds) => {
 };
 
 export default function DriverDashboard() {
+  const navigate = useNavigate();
   const { user } = useAuth();
   const [profile, setProfile] = useState(null);
   const [availableRides, setAvailableRides] = useState([]);
@@ -302,6 +304,7 @@ export default function DriverDashboard() {
       toast.success('Ride accepted.');
       await fetchAll();
       setTab('my-rides');
+      navigate('/driver/current-ride');
     } catch (err) {
       toast.error(err.response?.data?.message || 'Failed to accept ride');
     } finally {
@@ -446,6 +449,13 @@ export default function DriverDashboard() {
               >
                 {actionLoading === activeRide._id ? 'Updating...' : STATUS_LABEL[activeRide.status]}
               </button>
+              <button
+                type="button"
+                className="btn btn-ghost btn-sm"
+                onClick={() => navigate('/driver/current-ride')}
+              >
+                Open Current Ride
+              </button>
             </div>
           </div>
         )}
@@ -531,7 +541,18 @@ export default function DriverDashboard() {
             ) : (
               <div className="rides-grid">
                 {myRides.map((ride) => (
-                  <div key={ride._id} className="card">
+                  <div
+                    key={ride._id}
+                    className="card"
+                    onClick={() => {
+                      if (['accepted', 'in_progress'].includes(ride.status)) {
+                        navigate('/driver/current-ride');
+                      }
+                    }}
+                    style={{
+                      cursor: ['accepted', 'in_progress'].includes(ride.status) ? 'pointer' : 'default',
+                    }}
+                  >
                     <div className="flex-between" style={{ marginBottom: 12 }}>
                       <div><div style={{ fontFamily: 'var(--font-display)', fontWeight: 700 }}>{ride.userId?.name}</div><div style={{ fontSize: 13, color: 'var(--text-secondary)' }}>{new Date(ride.createdAt).toLocaleString()}</div></div>
                       <span className={`badge badge-${ride.status}`}>{ride.status.replace('_', ' ')}</span>
@@ -543,6 +564,16 @@ export default function DriverDashboard() {
                     <div className="flex-between"><span style={{ color: 'var(--amber)', fontWeight: 700, fontSize: 18 }}>Rs {ride.fare}</span><span style={{ fontSize: 13, color: 'var(--text-secondary)' }}>{ride.distance} km{ride.estimatedDuration ? ` | ${ride.estimatedDuration} min` : ''}</span></div>
                     {!!ride.userPriceAddon && <div style={{ marginTop: 8, fontSize: 13, color: 'var(--success)' }}>Rider add-on: +Rs {ride.userPriceAddon}</div>}
                     {ride.rating && <div style={{ marginTop: 10, fontSize: 14, color: 'var(--text-secondary)' }}>Rating: {'*'.repeat(ride.rating)}</div>}
+                    {['accepted', 'in_progress'].includes(ride.status) ? (
+                      <button
+                        type="button"
+                        className="btn btn-secondary btn-sm"
+                        style={{ marginTop: 10 }}
+                        onClick={() => navigate('/driver/current-ride')}
+                      >
+                        Open Current Ride
+                      </button>
+                    ) : null}
                   </div>
                 ))}
               </div>

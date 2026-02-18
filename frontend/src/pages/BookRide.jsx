@@ -536,7 +536,7 @@ export default function BookRide() {
 
       await API.post('/rides/book', payload);
       toast.success('Ride booked. Waiting for nearby drivers.');
-      navigate('/my-rides');
+      navigate('/current-ride');
     } catch (error) {
       toast.error(error.response?.data?.message || error.message || 'Booking failed. Try again.');
     } finally {

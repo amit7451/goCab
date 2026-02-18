@@ -1,4 +1,5 @@
 import { useState } from 'react';
+import { useNavigate } from 'react-router-dom';
 import API from '../api/axios';
 import toast from 'react-hot-toast';
 
@@ -20,9 +21,11 @@ const formatCountdown = (seconds) => {
 };
 
 export default function RideCard({ ride, onUpdate, nowMs }) {
+  const navigate = useNavigate();
   const [boostBy, setBoostBy] = useState(20);
   const canCancel = ['requested', 'accepted'].includes(ride.status);
   const canRate = ride.status === 'completed' && !ride.rating;
+  const canOpenCurrentRide = ['requested', 'accepted', 'in_progress'].includes(ride.status);
   const secondsLeft = ride.requestExpiresAt
     ? Math.max(0, Math.floor((new Date(ride.requestExpiresAt).getTime() - (nowMs || Date.now())) / 1000))
     : 0;
@@ -148,6 +151,16 @@ export default function RideCard({ ride, onUpdate, nowMs }) {
       )}
 
       <div style={{ display: 'flex', gap: 10, flexWrap: 'wrap', alignItems: 'center' }}>
+        {canOpenCurrentRide ? (
+          <button
+            type="button"
+            className="btn btn-secondary btn-sm"
+            onClick={() => navigate('/current-ride')}
+          >
+            Open Current Ride
+          </button>
+        ) : null}
+
         {canCancel ? (
           <button onClick={handleCancel} className="btn btn-danger btn-sm">
             Cancel Ride

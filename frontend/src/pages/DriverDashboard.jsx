@@ -200,25 +200,40 @@ export default function DriverDashboard() {
   );
 
   useEffect(() => {
-    if (!mapsReady || !navigator.geolocation) return;
+    if (!navigator.geolocation) return;
+
+    const onPosition = (position) => {
+      const coords = { lat: position.coords.latitude, lng: position.coords.longitude };
+      setDriverLocation(coords);
+      setLocationPermissionDenied(false);
+      void syncDriverLocation(coords);
+    };
+
+    const onError = (error) => {
+      if (error.code === error.PERMISSION_DENIED) {
+        setLocationPermissionDenied(true);
+      }
+    };
+
+    // Trigger permission prompt as soon as dashboard loads.
+    navigator.geolocation.getCurrentPosition(onPosition, onError, {
+      enableHighAccuracy: true,
+      timeout: 12000,
+      maximumAge: 7000,
+    });
+
     geolocationWatchRef.current = navigator.geolocation.watchPosition(
-      (position) => {
-        const coords = { lat: position.coords.latitude, lng: position.coords.longitude };
-        setDriverLocation(coords);
-        setLocationPermissionDenied(false);
-        void syncDriverLocation(coords);
-      },
-      (error) => {
-        if (error.code === error.PERMISSION_DENIED) setLocationPermissionDenied(true);
-      },
+      onPosition,
+      onError,
       { enableHighAccuracy: true, timeout: 12000, maximumAge: 7000 }
     );
+
     return () => {
       if (geolocationWatchRef.current !== null && navigator.geolocation) {
         navigator.geolocation.clearWatch(geolocationWatchRef.current);
       }
     };
-  }, [mapsReady, syncDriverLocation]);
+  }, [syncDriverLocation]);
 
   useEffect(() => {
     const map = mapRef.current;

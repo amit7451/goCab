@@ -96,6 +96,18 @@ const bookRide = async (req, res) => {
 
     await expireRequestedRides();
 
+    const existingActiveRide = await Ride.findOne({
+      userId: req.user._id,
+      status: { $in: ['requested', 'accepted', 'in_progress'] },
+    }).sort({ createdAt: -1 });
+
+    if (existingActiveRide) {
+      return res.status(400).json({
+        message: 'You already have an active ride. Complete or cancel it before booking another.',
+        rideId: existingActiveRide._id,
+      });
+    }
+
     const distanceKm = normalizeDistanceKm({
       distance,
       pickup: pickupPoint,

@@ -31,6 +31,8 @@ export default function DriverCurrentRide() {
   const [navigationInfo, setNavigationInfo] = useState(null);
   const [mapsReady, setMapsReady] = useState(false);
   const [mapsError, setMapsError] = useState('');
+  const [mapRefreshing, setMapRefreshing] = useState(false);
+  const [mapRefreshTick, setMapRefreshTick] = useState(0);
   const [otpInput, setOtpInput] = useState('');
   const [otpVerifying, setOtpVerifying] = useState(false);
   const [statusUpdating, setStatusUpdating] = useState(false);
@@ -60,10 +62,16 @@ export default function DriverCurrentRide() {
   const routeTarget = useMemo(() => {
     if (!activeRide) return null;
     if (isPrePickupPhase) {
-      return isValidCoords(activeRide.userLiveLocation) ? activeRide.userLiveLocation : activeRide.pickup;
+      return activeRide.pickup;
     }
     return activeRide.dropoff;
   }, [activeRide, isPrePickupPhase]);
+
+  const routeOrigin = useMemo(() => {
+    if (isValidCoords(driverLocation)) return driverLocation;
+    if (isValidCoords(profile?.currentLocation)) return toCoords(profile.currentLocation);
+    return null;
+  }, [driverLocation, profile]);
 
   const fetchData = useCallback(async () => {
     try {
@@ -257,13 +265,7 @@ export default function DriverCurrentRide() {
       });
     }
 
-    const origin = isValidCoords(driverLocation)
-      ? driverLocation
-      : isValidCoords(profile?.currentLocation)
-        ? toCoords(profile.currentLocation)
-        : null;
-
-    if (!origin || !isValidCoords(routeTarget)) {
+    if (!routeOrigin || !isValidCoords(routeTarget)) {
       directionsRendererRef.current?.set('directions', null);
       setNavigationInfo(null);
       return;
@@ -271,7 +273,7 @@ export default function DriverCurrentRide() {
 
     directionsServiceRef.current.route(
       {
-        origin,
+        origin: routeOrigin,
         destination: toCoords(routeTarget),
         travelMode: maps.TravelMode.DRIVING,
       },
@@ -290,7 +292,7 @@ export default function DriverCurrentRide() {
         });
       }
     );
-  }, [mapsReady, activeRide, routeTarget, driverLocation, profile]);
+  }, [mapsReady, activeRide, routeTarget, routeOrigin, driverLocation, mapRefreshTick]);
 
   const verifyOtp = async () => {
     if (!activeRide?._id) return;
@@ -336,6 +338,46 @@ export default function DriverCurrentRide() {
     map.setMapTypeId(mapTypeRef.current);
   };
 
+  const fetchLiveLocation = () => {
+    setMapRefreshing(true);
+    if (!navigator.geolocation) {
+      setMapRefreshTick((tick) => tick + 1);
+      setMapRefreshing(false);
+      return;
+    }
+
+    navigator.geolocation.getCurrentPosition(
+      (position) => {
+        const coords = { lat: position.coords.latitude, lng: position.coords.longitude };
+        setDriverLocation(coords);
+        void syncDriverLocation(coords);
+        mapRef.current?.panTo(coords);
+        setMapRefreshTick((tick) => tick + 1);
+        setMapRefreshing(false);
+      },
+      () => {
+        setMapRefreshTick((tick) => tick + 1);
+        setMapRefreshing(false);
+      },
+      { enableHighAccuracy: true, timeout: 12000, maximumAge: 0 }
+    );
+  };
+
+  const refreshMap = () => {
+    if (!mapsReady) {
+      setMapRefreshTick((tick) => tick + 1);
+      return;
+    }
+    setMapRefreshTick((tick) => tick + 1);
+  };
+
+  const openGoogleMapsNavigation = () => {
+    if (!routeOrigin || !isValidCoords(routeTarget)) return;
+    const destination = toCoords(routeTarget);
+    const url = `https://www.google.com/maps/dir/?api=1&origin=${routeOrigin.lat},${routeOrigin.lng}&destination=${destination.lat},${destination.lng}&travelmode=driving`;
+    window.open(url, '_blank', 'noopener,noreferrer');
+  };
+
   if (loading) {
     return (
       <div className="loading-screen">
@@ -376,7 +418,15 @@ export default function DriverCurrentRide() {
                 : 'OTP verified. Navigate to destination.'}
             </p>
           </div>
-          <div style={{ display: 'flex', gap: 8 }}>
+          <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap' }}>
+            <button
+              className="btn btn-secondary btn-sm"
+              onClick={fetchLiveLocation}
+              disabled={mapRefreshing}
+              title="Fetch your latest GPS location"
+            >
+              {mapRefreshing ? 'Locating...' : 'Get Live Location'}
+            </button>
             <button className="btn btn-ghost btn-sm" onClick={toggleMapType} disabled={!mapsReady}>
               Toggle View
             </button>
@@ -430,6 +480,24 @@ export default function DriverCurrentRide() {
           <div ref={mapContainerRef} className="map-canvas map-canvas-driver" style={{ height: '68vh' }} />
           {!mapsReady && !mapsError ? <div className="map-overlay">Loading map...</div> : null}
           {mapsError ? <div className="map-overlay map-overlay-error">{mapsError}</div> : null}
+          <button
+            type="button"
+            className="btn btn-ghost btn-sm"
+            onClick={refreshMap}
+            disabled={!mapsReady || mapRefreshing}
+            style={{ position: 'absolute', right: 14, top: 14, zIndex: 3 }}
+          >
+            {mapRefreshing ? 'Refreshing...' : 'Refresh Map'}
+          </button>
+          <button
+            type="button"
+            className="btn btn-primary btn-sm"
+            onClick={openGoogleMapsNavigation}
+            disabled={!routeOrigin || !isValidCoords(routeTarget)}
+            style={{ position: 'absolute', right: 14, bottom: 14, zIndex: 3 }}
+          >
+            Navigate
+          </button>
         </div>
 
         {navigationInfo ? (

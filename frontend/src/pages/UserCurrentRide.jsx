@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import { useNavigate } from 'react-router-dom';
+import { useNavigate, useSearchParams } from 'react-router-dom';
 import toast from 'react-hot-toast';
 import API from '../api/axios';
 import { loadGoogleMapsApi } from '../utils/googleMaps';
@@ -31,9 +31,16 @@ const formatCountdown = (seconds) => {
 
 export default function UserCurrentRide() {
   const navigate = useNavigate();
+  const [searchParams] = useSearchParams();
+  const selectedRideId = searchParams.get('rideId');
+
   const [loading, setLoading] = useState(true);
   const [rides, setRides] = useState([]);
   const [nowMs, setNowMs] = useState(Date.now());
+  const [boostBy, setBoostBy] = useState(20);
+  const [actionLoading, setActionLoading] = useState('');
+  const [mapRefreshing, setMapRefreshing] = useState(false);
+  const [mapRefreshTick, setMapRefreshTick] = useState(0);
   const [mapsReady, setMapsReady] = useState(false);
   const [mapsError, setMapsError] = useState('');
   const [navigationInfo, setNavigationInfo] = useState(null);
@@ -50,13 +57,18 @@ export default function UserCurrentRide() {
   const mapTypeRef = useRef('roadmap');
 
   const activeRide = useMemo(() => {
+    if (selectedRideId) {
+      const selectedRide = rides.find((ride) => ride._id === selectedRideId);
+      if (selectedRide) return selectedRide;
+    }
+
     const byPriority = ['in_progress', 'accepted', 'requested'];
     for (const status of byPriority) {
       const found = rides.find((ride) => ride.status === status);
       if (found) return found;
     }
     return null;
-  }, [rides]);
+  }, [rides, selectedRideId]);
 
   const isDriverSearching = activeRide?.status === 'requested';
   const isPrePickupPhase = !!(
@@ -68,6 +80,11 @@ export default function UserCurrentRide() {
   const secondsLeft = activeRide?.requestExpiresAt
     ? Math.max(0, Math.floor((new Date(activeRide.requestExpiresAt).getTime() - nowMs) / 1000))
     : 0;
+
+  const canCancelRide = activeRide?.status === 'requested';
+  const canIncreaseFare = isDriverSearching && secondsLeft > 0;
+  const canSyncUserLocation = ['requested', 'accepted', 'in_progress'].includes(activeRide?.status || '');
+  const destinationLabel = activeRide?.dropoff?.address?.split(',')[0] || 'destination';
 
   const driverLiveLocation = isValidCoords(activeRide?.driverId?.currentLocation)
     ? toCoords(activeRide.driverId.currentLocation)
@@ -194,7 +211,7 @@ export default function UserCurrentRide() {
   }, []);
 
   useEffect(() => {
-    if (!activeRide?._id || !userLocation) return;
+    if (!activeRide?._id || !userLocation || !canSyncUserLocation) return;
     const now = Date.now();
     if (now - lastSyncRef.current < 10000) return;
     lastSyncRef.current = now;
@@ -204,7 +221,7 @@ export default function UserCurrentRide() {
       lng: userLocation.lng,
       address: '',
     }).catch(() => null);
-  }, [activeRide?._id, userLocation, nowMs]);
+  }, [activeRide?._id, userLocation, nowMs, canSyncUserLocation]);
 
   useEffect(() => {
     const maps = window.google?.maps;
@@ -296,13 +313,78 @@ export default function UserCurrentRide() {
         });
       }
     );
-  }, [mapsReady, activeRide, driverLiveLocation, routeOrigin, routeTarget, userLocation]);
+  }, [mapsReady, activeRide, driverLiveLocation, routeOrigin, routeTarget, userLocation, mapRefreshTick]);
 
   const toggleMapType = () => {
     const map = mapRef.current;
     if (!map) return;
     mapTypeRef.current = mapTypeRef.current === 'roadmap' ? 'satellite' : 'roadmap';
     map.setMapTypeId(mapTypeRef.current);
+  };
+
+  const fetchLiveLocation = () => {
+    setMapRefreshing(true);
+    if (!navigator.geolocation) {
+      setMapRefreshTick((tick) => tick + 1);
+      setMapRefreshing(false);
+      return;
+    }
+
+    navigator.geolocation.getCurrentPosition(
+      (position) => {
+        const coords = { lat: position.coords.latitude, lng: position.coords.longitude };
+        setUserLocation(coords);
+        mapRef.current?.panTo(coords);
+        setMapRefreshTick((tick) => tick + 1);
+        setMapRefreshing(false);
+      },
+      () => {
+        setMapRefreshTick((tick) => tick + 1);
+        setMapRefreshing(false);
+      },
+      { enableHighAccuracy: true, timeout: 12000, maximumAge: 0 }
+    );
+  };
+
+  const refreshMap = () => {
+    if (!mapsReady) {
+      setMapRefreshTick((tick) => tick + 1);
+      return;
+    }
+    setMapRefreshTick((tick) => tick + 1);
+  };
+
+  const cancelRide = async () => {
+    if (!activeRide?._id || !canCancelRide) return;
+    if (!confirm('Cancel this ride?')) return;
+
+    setActionLoading('cancel');
+    try {
+      await API.put(`/rides/${activeRide._id}/cancel`);
+      toast.success('Ride cancelled');
+      await fetchRides();
+      navigate('/my-rides');
+    } catch (error) {
+      toast.error(error.response?.data?.message || 'Failed to cancel ride');
+    } finally {
+      setActionLoading('');
+    }
+  };
+
+  const increaseFare = async () => {
+    if (!activeRide?._id || !canIncreaseFare) return;
+    const incrementBy = Math.max(10, Number(boostBy || 0));
+
+    setActionLoading('boost');
+    try {
+      await API.put(`/rides/${activeRide._id}/addon`, { incrementBy });
+      toast.success(`Fare increased by Rs ${incrementBy}`);
+      await fetchRides();
+    } catch (error) {
+      toast.error(error.response?.data?.message || 'Failed to increase fare');
+    } finally {
+      setActionLoading('');
+    }
   };
 
   if (loading) {
@@ -320,11 +402,21 @@ export default function UserCurrentRide() {
         <div className="container">
           <div className="empty-state">
             <div className="empty-state-icon">-</div>
-            <h3>No active ride</h3>
-            <p>Book a ride to open live tracking.</p>
-            <button className="btn btn-primary" onClick={() => navigate('/book')}>
-              Book Ride
-            </button>
+            <h3>{selectedRideId ? 'Ride not found' : 'No active ride'}</h3>
+            <p>
+              {selectedRideId
+                ? 'This ride could not be found in your account.'
+                : 'Book a ride to open live tracking.'}
+            </p>
+            {selectedRideId ? (
+              <button className="btn btn-ghost" onClick={() => navigate('/my-rides')}>
+                Back to My Rides
+              </button>
+            ) : (
+              <button className="btn btn-primary" onClick={() => navigate('/book')}>
+                Book Ride
+              </button>
+            )}
           </div>
         </div>
       </div>
@@ -337,17 +429,27 @@ export default function UserCurrentRide() {
         <div className="flex-between" style={{ marginBottom: 16, gap: 12, flexWrap: 'wrap' }}>
           <div className="page-header" style={{ marginBottom: 0 }}>
             <h1>
-              Current <span>Ride</span>
+              Trip to <span>{destinationLabel}</span>
             </h1>
             <p>
               {isDriverSearching
-                ? 'Searching nearby drivers...'
+                ? 'Waiting for a driver to accept your trip.'
                 : isPrePickupPhase
-                  ? 'Driver is coming for pickup.'
-                  : 'Ride in progress to destination.'}
+                  ? 'Driver is on the way to your pickup location.'
+                  : activeRide.status === 'in_progress'
+                    ? 'Ride in progress to destination.'
+                    : `Ride status: ${activeRide.status.replace('_', ' ')}`}
             </p>
           </div>
-          <div style={{ display: 'flex', gap: 8 }}>
+          <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap' }}>
+            <button
+              className="btn btn-secondary btn-sm"
+              onClick={fetchLiveLocation}
+              disabled={mapRefreshing}
+              title="Fetch your latest GPS location"
+            >
+              {mapRefreshing ? 'Locating...' : 'Get Live Location'}
+            </button>
             <button className="btn btn-ghost btn-sm" onClick={toggleMapType} disabled={!mapsReady}>
               Toggle View
             </button>
@@ -358,25 +460,48 @@ export default function UserCurrentRide() {
         </div>
 
         <div className="card" style={{ marginBottom: 16 }}>
-          <div style={{ fontSize: 14, color: 'var(--text-secondary)' }}>
-            Status: <strong style={{ color: 'var(--text-primary)' }}>{activeRide.status.replace('_', ' ')}</strong>
-          </div>
-          <div style={{ marginTop: 4, fontSize: 14, color: 'var(--text-secondary)' }}>
-            Fare: <strong style={{ color: 'var(--amber)' }}>Rs {activeRide.fare}</strong>
-            &nbsp;|&nbsp;Distance: {activeRide.distance} km
-          </div>
-          <div style={{ marginTop: 4, fontSize: 13, color: 'var(--text-secondary)' }}>
-            Pickup: {activeRide.pickup.address}
-          </div>
-          <div style={{ marginTop: 2, fontSize: 13, color: 'var(--text-secondary)' }}>
-            Drop-off: {activeRide.dropoff.address}
+          <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(200px, 1fr))', gap: 10 }}>
+            <div style={{ background: 'var(--bg-elevated)', borderRadius: 10, padding: '10px 12px' }}>
+              <div className="map-meta-label">Status</div>
+              <strong style={{ color: 'var(--text-primary)', textTransform: 'capitalize' }}>
+                {activeRide.status.replace('_', ' ')}
+              </strong>
+            </div>
+            <div style={{ background: 'var(--bg-elevated)', borderRadius: 10, padding: '10px 12px' }}>
+              <div className="map-meta-label">Fare</div>
+              <strong style={{ color: 'var(--amber)' }}>Rs {activeRide.fare}</strong>
+            </div>
+            <div style={{ background: 'var(--bg-elevated)', borderRadius: 10, padding: '10px 12px' }}>
+              <div className="map-meta-label">Distance</div>
+              <strong>{activeRide.distance} km</strong>
+            </div>
+            {isDriverSearching ? (
+              <div style={{ background: 'var(--bg-elevated)', borderRadius: 10, padding: '10px 12px' }}>
+                <div className="map-meta-label">Driver Wait Timer</div>
+                <strong style={{ color: secondsLeft <= 45 ? 'var(--danger)' : 'var(--amber)' }}>
+                  {formatCountdown(secondsLeft)}
+                </strong>
+              </div>
+            ) : null}
           </div>
 
-          {isDriverSearching ? (
-            <div style={{ marginTop: 10, color: secondsLeft <= 45 ? 'var(--danger)' : 'var(--amber)', fontSize: 13 }}>
-              Driver search timer: {formatCountdown(secondsLeft)}
+          <div style={{ marginTop: 12, background: 'var(--bg-elevated)', borderRadius: 10, padding: '14px 16px' }}>
+            <div className="ride-stop">
+              <span className="ride-stop-dot pickup" />
+              <span style={{ fontSize: 14, color: 'var(--text-secondary)' }}>
+                <strong style={{ color: 'var(--text-primary)' }}>Pickup: </strong>
+                {activeRide.pickup.address}
+              </span>
             </div>
-          ) : null}
+            <div className="ride-stop-line" style={{ marginLeft: 5, marginTop: 4, marginBottom: 4 }} />
+            <div className="ride-stop">
+              <span className="ride-stop-dot dropoff" />
+              <span style={{ fontSize: 14, color: 'var(--text-secondary)' }}>
+                <strong style={{ color: 'var(--text-primary)' }}>Drop-off: </strong>
+                {activeRide.dropoff.address}
+              </span>
+            </div>
+          </div>
 
           {activeRide.status === 'accepted' && activeRide.pickupOtp && !activeRide.pickupOtpVerifiedAt ? (
             <div
@@ -401,12 +526,58 @@ export default function UserCurrentRide() {
               Pickup OTP verified at {new Date(activeRide.pickupOtpVerifiedAt).toLocaleTimeString()}
             </div>
           ) : null}
+
+          {(canCancelRide || canIncreaseFare) && (
+            <div style={{ marginTop: 12, display: 'flex', gap: 10, alignItems: 'center', flexWrap: 'wrap' }}>
+              {canCancelRide ? (
+                <button
+                  type="button"
+                  className="btn btn-danger btn-sm"
+                  onClick={cancelRide}
+                  disabled={actionLoading === 'cancel'}
+                >
+                  {actionLoading === 'cancel' ? 'Cancelling...' : 'Cancel Ride'}
+                </button>
+              ) : null}
+
+              {canIncreaseFare ? (
+                <>
+                  <input
+                    className="form-input"
+                    type="number"
+                    min={10}
+                    step={10}
+                    value={boostBy}
+                    onChange={(e) => setBoostBy(e.target.value)}
+                    style={{ width: 120, padding: '8px 10px' }}
+                  />
+                  <button
+                    type="button"
+                    className="btn btn-secondary btn-sm"
+                    onClick={increaseFare}
+                    disabled={actionLoading === 'boost'}
+                  >
+                    {actionLoading === 'boost' ? 'Updating...' : 'Increase Fare'}
+                  </button>
+                </>
+              ) : null}
+            </div>
+          )}
         </div>
 
         <div className="map-shell">
           <div ref={mapContainerRef} className="map-canvas map-canvas-driver" style={{ height: '68vh' }} />
           {!mapsReady && !mapsError ? <div className="map-overlay">Loading map...</div> : null}
           {mapsError ? <div className="map-overlay map-overlay-error">{mapsError}</div> : null}
+          <button
+            type="button"
+            className="btn btn-ghost btn-sm"
+            onClick={refreshMap}
+            disabled={!mapsReady || mapRefreshing}
+            style={{ position: 'absolute', right: 14, top: 14, zIndex: 3 }}
+          >
+            {mapRefreshing ? 'Refreshing...' : 'Refresh Map'}
+          </button>
         </div>
 
         {navigationInfo ? (

@@ -23,13 +23,25 @@ const formatCountdown = (seconds) => {
 export default function RideCard({ ride, onUpdate, nowMs }) {
   const navigate = useNavigate();
   const [boostBy, setBoostBy] = useState(20);
-  const canCancel = ['requested', 'accepted'].includes(ride.status);
+  const canCancel = ride.status === 'requested';
   const canRate = ride.status === 'completed' && !ride.rating;
-  const canOpenCurrentRide = ['requested', 'accepted', 'in_progress'].includes(ride.status);
   const secondsLeft = ride.requestExpiresAt
     ? Math.max(0, Math.floor((new Date(ride.requestExpiresAt).getTime() - (nowMs || Date.now())) / 1000))
     : 0;
   const canBoost = ride.status === 'requested' && secondsLeft > 0;
+
+  const openRideDetails = () => navigate(`/current-ride?rideId=${ride._id}`);
+  const handleCardClick = (event) => {
+    if (event.target.closest('button, input, select, textarea, a')) return;
+    openRideDetails();
+  };
+  const handleCardKeyDown = (event) => {
+    if (event.target.closest('button, input, select, textarea, a')) return;
+    if (event.key === 'Enter' || event.key === ' ') {
+      event.preventDefault();
+      openRideDetails();
+    }
+  };
 
   const handleCancel = async () => {
     if (!confirm('Cancel this ride?')) return;
@@ -64,7 +76,15 @@ export default function RideCard({ ride, onUpdate, nowMs }) {
   };
 
   return (
-    <div className="card" style={{ display: 'flex', flexDirection: 'column', gap: 16 }}>
+    <div
+      className="card"
+      style={{ display: 'flex', flexDirection: 'column', gap: 16, cursor: 'pointer' }}
+      onClick={handleCardClick}
+      onKeyDown={handleCardKeyDown}
+      role="button"
+      tabIndex={0}
+      aria-label={`Open ride details to ${ride.dropoff.address}`}
+    >
       <div className="flex-between">
         <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
           <span style={{ fontSize: 14, fontWeight: 700 }}>{RIDE_TYPE_ICON[ride.rideType] || 'RIDE'}</span>
@@ -151,16 +171,6 @@ export default function RideCard({ ride, onUpdate, nowMs }) {
       )}
 
       <div style={{ display: 'flex', gap: 10, flexWrap: 'wrap', alignItems: 'center' }}>
-        {canOpenCurrentRide ? (
-          <button
-            type="button"
-            className="btn btn-secondary btn-sm"
-            onClick={() => navigate('/current-ride')}
-          >
-            Open Current Ride
-          </button>
-        ) : null}
-
         {canCancel ? (
           <button onClick={handleCancel} className="btn btn-danger btn-sm">
             Cancel Ride

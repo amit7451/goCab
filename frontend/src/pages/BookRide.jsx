@@ -210,7 +210,7 @@ export default function BookRide() {
 
     const initMap = async () => {
       try {
-        const maps = await loadGoogleMapsApi();
+        const maps = await loadGoogleMapsApi({ requirePlaces: true });
         if (isUnmounted || !mapContainerRef.current) return;
 
         googleMapsRef.current = maps;
@@ -538,7 +538,12 @@ export default function BookRide() {
       toast.success('Ride booked. Waiting for nearby drivers.');
       navigate('/current-ride');
     } catch (error) {
-      toast.error(error.response?.data?.message || error.message || 'Booking failed. Try again.');
+      const message = error.response?.data?.message || error.message || 'Booking failed. Try again.';
+      const activeRideId = error.response?.data?.rideId;
+      toast.error(message);
+      if (activeRideId) {
+        navigate(`/current-ride?rideId=${activeRideId}`);
+      }
     } finally {
       setLoading(false);
     }

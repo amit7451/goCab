@@ -378,3 +378,15 @@ MIT License — free to use, modify, and distribute.
 ---
 
 **Built with ❤️ using MongoDB, Express, React & Node.js**
+
+# Team Behind the Project
+
+This project was successfully developed through the combined efforts of our dedicated team. Each member contributed their unique skills in research, problem-solving, design, and implementation to bring the project to completion. Through collaboration, consistent communication, and shared responsibility, the team worked together to overcome challenges and deliver a well-structured solution while gaining valuable hands-on experience during the development process.
+
+## Team Members
+
+* **Member 1** – Aman Yadav
+* **Member 2** – Amit kumar (30)
+* **Member 3** – Amit Kumar (31)
+* **Member 4** – Amit Kumar Verma
+

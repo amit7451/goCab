@@ -31,20 +31,27 @@ A full-stack cab booking application built with **MongoDB, Express, React, and N
 
 ```
 GoCab/
-├── backend/                # Node.js + Express API
-│   ├── server.js           # Entry point
-│   ├── config/db.js        # MongoDB connection
-│   ├── models/             # User, Driver, Ride schemas
-│   ├── routes/             # Route declarations
-│   ├── controllers/        # Business logic
-│   └── middleware/         # JWT auth guard
+├── backend/                # Node.js + Express API + TypeScript
+│   ├── src/
+│   │   ├── server.ts       # Entry point
+│   │   ├── config/db.ts    # MongoDB connection
+│   │   ├── models/         # User, Driver, Ride schemas & types
+│   │   ├── routes/         # Typed route declarations
+│   │   ├── controllers/    # Typed controller handlers
+│   │   ├── middleware/     # Typed JWT auth guard
+│   │   └── types/          # Shared backend TypeScript definitions
+│   ├── dist/               # Compiled production JS output
+│   └── tsconfig.json       # Backend TypeScript config
 │
-├── frontend/               # React + Vite SPA
-│   └── src/
-│       ├── api/axios.js    # Axios instance with auth headers
-│       ├── context/        # Auth context (global state)
-│       ├── components/     # Navbar, RideCard, ProtectedRoute
-│       └── pages/          # Home, Login, Register, BookRide, MyRides, DriverDashboard
+├── frontend/               # React + Vite + TypeScript SPA
+│   ├── src/
+│   │   ├── api/axios.ts    # Typed Axios instance with auth headers
+│   │   ├── context/        # Typed Auth context
+│   │   ├── components/     # Typed Navbar, RideCard, ProtectedRoute
+│   │   ├── pages/          # Home, Login, Register, BookRide, MyRides, DriverDashboard
+│   │   └── types/          # Shared frontend TypeScript interfaces
+│   ├── vite.config.ts      # Vite TypeScript configuration
+│   └── tsconfig.json       # Frontend TypeScript config
 │
 └── README.md
 ```
@@ -177,7 +184,7 @@ npm install
 
 ### Step 7 — Configure Frontend Environment (Optional)
 
-The frontend uses a Vite proxy by default so **no env file is required for local development**. The proxy in `vite.config.js` automatically forwards `/api` requests to `http://localhost:5000`.
+The frontend uses a Vite proxy by default so **no env file is required for local development**. The proxy in `vite.config.ts` automatically forwards `/api` requests to `http://localhost:5000`.
 
 If you want to point to a remote backend:
 ```bash
@@ -377,7 +384,7 @@ MIT License — free to use, modify, and distribute.
 
 ---
 
-**Built with ❤️ using MongoDB, Express, React & Node.js**
+**Built with ❤️ using MongoDB, Express, React, Node.js & TypeScript**
 
 # Team Behind the Project
 
@@ -389,4 +396,3 @@ This project was successfully developed through the combined efforts of our dedi
 * **Member 2** – Amit kumar (30)
 * **Member 3** – Amit Kumar (31)
 * **Member 4** – Amit Kumar Verma
-

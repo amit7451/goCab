@@ -89,6 +89,12 @@ export default function UserCurrentRide(): React.ReactElement {
   const [isSocketConnected, setIsSocketConnected] = useState(false);
   const [locationPermissionDenied, setLocationPermissionDenied] = useState(false);
 
+  const [lastTrackedRideId, setLastTrackedRideId] = useState<string | null>(() => {
+    return selectedRideId || sessionStorage.getItem('gocab_last_tracked_ride') || null;
+  });
+  const [hoverRating, setHoverRating] = useState<number>(0);
+  const [submittingRating, setSubmittingRating] = useState<boolean>(false);
+
   const mapContainerRef = useRef<HTMLDivElement | null>(null);
   const mapRef = useRef<any>(null);
   const directionsServiceRef = useRef<any>(null);
@@ -110,8 +116,30 @@ export default function UserCurrentRide(): React.ReactElement {
       const found = rides.find((ride) => ride.status === status);
       if (found) return found;
     }
+
+    if (lastTrackedRideId) {
+      const trackedRide = rides.find((ride) => ride._id === lastTrackedRideId);
+      if (trackedRide && (trackedRide.status === 'completed' || trackedRide.status === 'cancelled')) {
+        return trackedRide;
+      }
+    }
+
+    const recentCompleted = rides.find((ride) => {
+      if (ride.status !== 'completed') return false;
+      const finishedAt = new Date(ride.endTime || ride.updatedAt).getTime();
+      return Date.now() - finishedAt < 2 * 60 * 60 * 1000;
+    });
+    if (recentCompleted) return recentCompleted;
+
     return null;
-  }, [rides, selectedRideId]);
+  }, [rides, selectedRideId, lastTrackedRideId]);
+
+  useEffect(() => {
+    if (activeRide?._id) {
+      setLastTrackedRideId(activeRide._id);
+      sessionStorage.setItem('gocab_last_tracked_ride', activeRide._id);
+    }
+  }, [activeRide?._id]);
 
   const isDriverSearching = activeRide?.status === 'requested';
   const isPrePickupPhase = !!(
@@ -146,7 +174,10 @@ export default function UserCurrentRide(): React.ReactElement {
       if (driverLiveLocation) return driverLiveLocation;
       return isValidCoords(activeRide.pickup) ? toCoords(activeRide.pickup) : null;
     }
-    // In progress trip
+    // In progress or completed trip: origin is pickup
+    if (activeRide.status === 'completed') {
+      return isValidCoords(activeRide.pickup) ? toCoords(activeRide.pickup) : null;
+    }
     if (driverLiveLocation) return driverLiveLocation;
     if (isValidCoords(activeRide.pickup)) return toCoords(activeRide.pickup);
     return null;
@@ -159,10 +190,8 @@ export default function UserCurrentRide(): React.ReactElement {
     }
     if (isPrePickupPhase) {
       if (!driverLiveLocation) {
-        // Driver not yet located: preview trip route from pickup to dropoff
         return isValidCoords(activeRide.dropoff) ? toCoords(activeRide.dropoff) : null;
       }
-      // Driver located: target is pickup location
       if (isValidCoords(activeRide.userLiveLocation)) return toCoords(activeRide.userLiveLocation!);
       return isValidCoords(activeRide.pickup) ? toCoords(activeRide.pickup) : null;
     }
@@ -223,13 +252,25 @@ export default function UserCurrentRide(): React.ReactElement {
 
     const onRideStatusChanged = (payload: any) => {
       if (payload?.status) {
-        toast(`Ride updated: ${payload.status.replace('_', ' ')}`);
+        if (payload.status === 'completed') {
+          toast.success('🎉 You have arrived! Trip completed.', { duration: 5000 });
+        } else {
+          toast(`Ride updated: ${payload.status.replace('_', ' ')}`);
+        }
+        if (payload?.rideId) {
+          setLastTrackedRideId(payload.rideId);
+          sessionStorage.setItem('gocab_last_tracked_ride', payload.rideId);
+        }
         fetchRides();
       }
     };
 
-    const onRideCancelled = () => {
+    const onRideCancelled = (payload: any) => {
       toast.error('This ride was cancelled');
+      if (payload?.rideId) {
+        setLastTrackedRideId(payload.rideId);
+        sessionStorage.setItem('gocab_last_tracked_ride', payload.rideId);
+      }
       fetchRides();
     };
 
@@ -262,12 +303,15 @@ export default function UserCurrentRide(): React.ReactElement {
     let disposed = false;
 
     if (loading || !activeRide || !mapContainerRef.current) return;
-    if (mapRef.current) return;
+    if (mapRef.current && mapRef.current.getDiv() === mapContainerRef.current) return;
+    if (mapRef.current && mapRef.current.getDiv() !== mapContainerRef.current) {
+      mapRef.current = null;
+    }
 
     (async () => {
       try {
         const maps = await loadGoogleMapsApi();
-        if (disposed || !mapContainerRef.current || mapRef.current) return;
+        if (disposed || !mapContainerRef.current) return;
 
         mapRef.current = new maps.Map(mapContainerRef.current, {
           center: INDIA_CENTER,
@@ -303,7 +347,7 @@ export default function UserCurrentRide(): React.ReactElement {
     return () => {
       disposed = true;
     };
-  }, [loading, activeRide?._id, mapRefreshTick]);
+  }, [loading, activeRide?._id, activeRide?.status, mapRefreshTick]);
 
   // Teardown map on final unmount
   useEffect(() => {
@@ -402,7 +446,8 @@ export default function UserCurrentRide(): React.ReactElement {
         fontWeight: '700',
       });
     }
-    if (driverLiveLocation) {
+
+    if (driverLiveLocation && activeRide.status !== 'completed') {
       setMarker('driver', driverLiveLocation, 'Driver Cab', null, null);
       markerRefs.current.driver?.setIcon({
         url: '/taxi.svg',
@@ -412,25 +457,31 @@ export default function UserCurrentRide(): React.ReactElement {
     } else {
       hideMarker('driver');
     }
-    if (isValidCoords(activeRide.userLiveLocation)) {
-      setMarker('user', toCoords(activeRide.userLiveLocation!), 'You', '#22c55e', {
-        text: 'U',
-        color: '#0b1220',
-        fontWeight: '700',
-      });
-    } else if (userLocation) {
-      setMarker('user', userLocation, 'You', '#22c55e', {
-        text: 'U',
-        color: '#0b1220',
-        fontWeight: '700',
-      });
-    }
-    if (routeTarget) {
-      setMarker('target', routeTarget, 'Target', '#22c55e', {
-        text: 'T',
-        color: '#0b1220',
-        fontWeight: '700',
-      });
+
+    if (activeRide.status !== 'completed') {
+      if (isValidCoords(activeRide.userLiveLocation)) {
+        setMarker('user', toCoords(activeRide.userLiveLocation!), 'You', '#22c55e', {
+          text: 'U',
+          color: '#0b1220',
+          fontWeight: '700',
+        });
+      } else if (userLocation) {
+        setMarker('user', userLocation, 'You', '#22c55e', {
+          text: 'U',
+          color: '#0b1220',
+          fontWeight: '700',
+        });
+      }
+      if (routeTarget) {
+        setMarker('target', routeTarget, 'Target', '#22c55e', {
+          text: 'T',
+          color: '#0b1220',
+          fontWeight: '700',
+        });
+      }
+    } else {
+      hideMarker('user');
+      hideMarker('target');
     }
 
     if (!routeOrigin || !routeTarget) {
@@ -552,6 +603,32 @@ export default function UserCurrentRide(): React.ReactElement {
     }
   };
 
+  const handleRateDriver = async (ratingValue: number) => {
+    if (!activeRide?._id || submittingRating) return;
+    setSubmittingRating(true);
+    try {
+      await API.put(`/rides/${activeRide._id}/rate`, { rating: ratingValue });
+      toast.success(`⭐ Thank you! You rated ${ratingValue} star${ratingValue > 1 ? 's' : ''}.`);
+      setRides((prev) =>
+        prev.map((r) => (r._id === activeRide._id ? { ...r, rating: ratingValue } : r))
+      );
+    } catch (err: any) {
+      toast.error(err?.response?.data?.message || 'Failed to submit rating');
+    } finally {
+      setSubmittingRating(false);
+    }
+  };
+
+  const handleBookAnotherRide = () => {
+    sessionStorage.removeItem('gocab_last_tracked_ride');
+    setLastTrackedRideId(null);
+    navigate('/book');
+  };
+
+  const handleViewAllRides = () => {
+    navigate('/my-rides');
+  };
+
   if (loading) {
     return (
       <div className="loading-screen">
@@ -586,6 +663,604 @@ export default function UserCurrentRide(): React.ReactElement {
     );
   }
 
+  // Cancelled Ride View
+  if (activeRide.status === 'cancelled') {
+    return (
+      <div className="page">
+        <div className="container" style={{ maxWidth: 680 }}>
+          <div className="card" style={{ padding: 36, textAlign: 'center', borderColor: 'rgba(239, 68, 68, 0.3)' }}>
+            <div
+              style={{
+                width: 64,
+                height: 64,
+                borderRadius: '50%',
+                background: 'rgba(239, 68, 68, 0.15)',
+                color: 'var(--danger)',
+                fontSize: 32,
+                display: 'inline-flex',
+                alignItems: 'center',
+                justifyContent: 'center',
+                marginBottom: 16,
+              }}
+            >
+              ✕
+            </div>
+            <h2 style={{ margin: '0 0 8px', fontFamily: 'var(--font-display)' }}>Ride Cancelled</h2>
+            <p style={{ color: 'var(--text-secondary)', marginBottom: 20 }}>
+              {activeRide.cancelledReason || 'This trip has been cancelled.'}
+            </p>
+            <div
+              style={{
+                background: 'var(--bg-elevated)',
+                borderRadius: 12,
+                padding: '14px 18px',
+                textAlign: 'left',
+                marginBottom: 24,
+                fontSize: 14,
+              }}
+            >
+              <div style={{ marginBottom: 6 }}>
+                <strong style={{ color: 'var(--text-primary)' }}>Pickup: </strong>
+                <span style={{ color: 'var(--text-secondary)' }}>{activeRide.pickup.address}</span>
+              </div>
+              <div>
+                <strong style={{ color: 'var(--text-primary)' }}>Drop-off: </strong>
+                <span style={{ color: 'var(--text-secondary)' }}>{activeRide.dropoff.address}</span>
+              </div>
+            </div>
+            <div style={{ display: 'flex', gap: 12, justifyContent: 'center', flexWrap: 'wrap' }}>
+              <button className="btn btn-primary" onClick={handleBookAnotherRide}>
+                🚕 Book Another Ride
+              </button>
+              <button className="btn btn-ghost" onClick={handleViewAllRides}>
+                📄 View My Rides
+              </button>
+            </div>
+          </div>
+        </div>
+      </div>
+    );
+  }
+
+  // Completed Ride View with Full Receipt, Driver Vehicle Info, and Rating
+  if (activeRide.status === 'completed') {
+    return (
+      <div className="page">
+        <div className="container" style={{ maxWidth: 1200 }}>
+          {/* Hero Banner with Actions */}
+          <div
+            className="card"
+            style={{
+              marginBottom: 20,
+              background: 'linear-gradient(135deg, rgba(16, 185, 129, 0.12) 0%, rgba(17, 29, 53, 0.8) 100%)',
+              borderColor: 'rgba(16, 185, 129, 0.35)',
+              padding: '24px 28px',
+            }}
+          >
+            <div className="flex-between" style={{ gap: 16, flexWrap: 'wrap' }}>
+              <div style={{ display: 'flex', alignItems: 'center', gap: 16 }}>
+                <div
+                  style={{
+                    width: 56,
+                    height: 56,
+                    borderRadius: '50%',
+                    background: 'rgba(16, 185, 129, 0.2)',
+                    border: '2px solid var(--success)',
+                    display: 'flex',
+                    alignItems: 'center',
+                    justifyContent: 'center',
+                    fontSize: 28,
+                    flexShrink: 0,
+                  }}
+                >
+                  🎉
+                </div>
+                <div>
+                  <div style={{ display: 'flex', alignItems: 'center', gap: 10, flexWrap: 'wrap' }}>
+                    <h1 style={{ margin: 0, fontSize: 26, fontFamily: 'var(--font-display)' }}>
+                      Trip Completed!
+                    </h1>
+                    <span className="badge badge-completed" style={{ fontSize: 12 }}>
+                      ✓ Safely Arrived
+                    </span>
+                  </div>
+                  <p style={{ color: 'var(--text-secondary)', margin: '4px 0 0', fontSize: 14 }}>
+                    {activeRide.endTime
+                      ? `Arrived at ${new Date(activeRide.endTime).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })} • Destination reached successfully`
+                      : 'Destination reached successfully • Thank you for choosing GoCab'}
+                  </p>
+                </div>
+              </div>
+
+              <div style={{ display: 'flex', gap: 10, flexWrap: 'wrap', alignItems: 'center' }}>
+                <button
+                  type="button"
+                  className="btn btn-primary"
+                  onClick={handleBookAnotherRide}
+                  style={{ padding: '10px 20px', fontWeight: 700 }}
+                >
+                  🚕 Book Another Ride
+                </button>
+                <button
+                  type="button"
+                  className="btn btn-ghost"
+                  onClick={handleViewAllRides}
+                  style={{ padding: '10px 18px' }}
+                >
+                  📄 View My Rides
+                </button>
+              </div>
+            </div>
+          </div>
+
+          {/* 2-Column Responsive Layout */}
+          <div
+            style={{
+              display: 'grid',
+              gridTemplateColumns: 'repeat(auto-fit, minmax(360px, 1fr))',
+              gap: 20,
+              alignItems: 'start',
+            }}
+          >
+            {/* Left Column: Receipt, Driver Info, Rating Widget */}
+            <div style={{ display: 'flex', flexDirection: 'column', gap: 20 }}>
+              {/* Trip Receipt Card */}
+              <div className="card" style={{ padding: 24 }}>
+                <div className="flex-between" style={{ marginBottom: 16 }}>
+                  <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+                    <span style={{ fontSize: 20 }}>🧾</span>
+                    <h3 style={{ margin: 0, fontSize: 18, fontFamily: 'var(--font-display)' }}>
+                      Trip Receipt
+                    </h3>
+                  </div>
+                  <span
+                    style={{
+                      padding: '4px 10px',
+                      borderRadius: 20,
+                      fontSize: 12,
+                      fontWeight: 600,
+                      background: 'rgba(16, 185, 129, 0.15)',
+                      color: 'var(--success)',
+                      border: '1px solid rgba(16, 185, 129, 0.3)',
+                    }}
+                  >
+                    ✓ Paid via {activeRide.paymentMethod === 'card' ? 'Card' : 'Cash'}
+                  </span>
+                </div>
+
+                {/* Fare Display */}
+                <div
+                  style={{
+                    background: 'var(--bg-elevated)',
+                    borderRadius: 14,
+                    padding: '18px 20px',
+                    display: 'flex',
+                    justifyContent: 'space-between',
+                    alignItems: 'center',
+                    marginBottom: 16,
+                    border: '1px solid var(--border)',
+                  }}
+                >
+                  <div>
+                    <span style={{ fontSize: 12, color: 'var(--text-secondary)', textTransform: 'uppercase', letterSpacing: '0.05em' }}>
+                      Total Fare Paid
+                    </span>
+                    <div style={{ fontSize: 34, fontWeight: 800, color: 'var(--amber)', fontFamily: 'var(--font-display)' }}>
+                      ₹{activeRide.fare}
+                    </div>
+                  </div>
+                  <div style={{ textAlign: 'right' }}>
+                    <span
+                      style={{
+                        fontSize: 13,
+                        textTransform: 'capitalize',
+                        color: 'var(--text-primary)',
+                        fontWeight: 600,
+                        display: 'block',
+                      }}
+                    >
+                      {activeRide.rideType} Ride
+                    </span>
+                    <span style={{ fontSize: 12, color: 'var(--text-muted)' }}>
+                      {activeRide.paymentMethod === 'card' ? '💳 Online / Card' : '💵 Cash to Driver'}
+                    </span>
+                  </div>
+                </div>
+
+                {/* Fare Breakdown */}
+                <div
+                  style={{
+                    background: 'rgba(8, 14, 30, 0.4)',
+                    borderRadius: 10,
+                    padding: '12px 14px',
+                    marginBottom: 16,
+                    fontSize: 13,
+                  }}
+                >
+                  <div className="flex-between" style={{ padding: '4px 0', color: 'var(--text-secondary)' }}>
+                    <span>Base Fare & Distance</span>
+                    <span style={{ color: 'var(--text-primary)' }}>
+                      ₹{Math.max(0, activeRide.fare - (activeRide.userPriceAddon || 0))}
+                    </span>
+                  </div>
+                  {Boolean(activeRide.userPriceAddon) && (
+                    <div className="flex-between" style={{ padding: '4px 0', color: 'var(--text-secondary)' }}>
+                      <span>Priority Tip / Boost</span>
+                      <span style={{ color: 'var(--amber)' }}>+₹{activeRide.userPriceAddon}</span>
+                    </div>
+                  )}
+                  <div
+                    className="flex-between"
+                    style={{
+                      padding: '8px 0 2px',
+                      marginTop: 4,
+                      borderTop: '1px solid var(--border)',
+                      fontWeight: 700,
+                      color: 'var(--text-primary)',
+                    }}
+                  >
+                    <span>Final Total</span>
+                    <span style={{ color: 'var(--amber)' }}>₹{activeRide.fare}</span>
+                  </div>
+                </div>
+
+                {/* Metrics Grid */}
+                <div
+                  style={{
+                    display: 'grid',
+                    gridTemplateColumns: 'repeat(3, 1fr)',
+                    gap: 8,
+                    marginBottom: 16,
+                  }}
+                >
+                  <div
+                    style={{
+                      background: 'var(--bg-elevated)',
+                      borderRadius: 10,
+                      padding: '10px 12px',
+                      textAlign: 'center',
+                    }}
+                  >
+                    <div style={{ fontSize: 11, color: 'var(--text-secondary)', textTransform: 'uppercase' }}>
+                      Distance
+                    </div>
+                    <div style={{ fontSize: 16, fontWeight: 700, marginTop: 2 }}>
+                      {activeRide.distance} km
+                    </div>
+                  </div>
+                  <div
+                    style={{
+                      background: 'var(--bg-elevated)',
+                      borderRadius: 10,
+                      padding: '10px 12px',
+                      textAlign: 'center',
+                    }}
+                  >
+                    <div style={{ fontSize: 11, color: 'var(--text-secondary)', textTransform: 'uppercase' }}>
+                      Duration
+                    </div>
+                    <div style={{ fontSize: 16, fontWeight: 700, marginTop: 2 }}>
+                      {activeRide.estimatedDuration || 15} mins
+                    </div>
+                  </div>
+                  <div
+                    style={{
+                      background: 'var(--bg-elevated)',
+                      borderRadius: 10,
+                      padding: '10px 12px',
+                      textAlign: 'center',
+                    }}
+                  >
+                    <div style={{ fontSize: 11, color: 'var(--text-secondary)', textTransform: 'uppercase' }}>
+                      Vehicle Tier
+                    </div>
+                    <div
+                      style={{
+                        fontSize: 16,
+                        fontWeight: 700,
+                        marginTop: 2,
+                        textTransform: 'capitalize',
+                        color: 'var(--amber)',
+                      }}
+                    >
+                      {activeRide.rideType}
+                    </div>
+                  </div>
+                </div>
+
+                {/* Stops Recap */}
+                <div
+                  style={{
+                    background: 'var(--bg-elevated)',
+                    borderRadius: 10,
+                    padding: '14px 16px',
+                  }}
+                >
+                  <div className="ride-stop">
+                    <span className="ride-stop-dot pickup" />
+                    <div style={{ fontSize: 13, color: 'var(--text-secondary)' }}>
+                      <strong style={{ color: 'var(--text-primary)', display: 'block', fontSize: 14 }}>
+                        Pickup Location
+                      </strong>
+                      {activeRide.pickup.address}
+                      {activeRide.startTime ? (
+                        <span style={{ display: 'block', fontSize: 11, color: 'var(--text-muted)', marginTop: 2 }}>
+                          Started at {new Date(activeRide.startTime).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}
+                        </span>
+                      ) : null}
+                    </div>
+                  </div>
+                  <div className="ride-stop-line" style={{ marginLeft: 5, marginTop: 6, marginBottom: 6 }} />
+                  <div className="ride-stop">
+                    <span className="ride-stop-dot dropoff" />
+                    <div style={{ fontSize: 13, color: 'var(--text-secondary)' }}>
+                      <strong style={{ color: 'var(--text-primary)', display: 'block', fontSize: 14 }}>
+                        Drop-off Destination
+                      </strong>
+                      {activeRide.dropoff.address}
+                      {activeRide.endTime ? (
+                        <span style={{ display: 'block', fontSize: 11, color: 'var(--text-muted)', marginTop: 2 }}>
+                          Completed at {new Date(activeRide.endTime).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}
+                        </span>
+                      ) : null}
+                    </div>
+                  </div>
+                </div>
+              </div>
+
+              {/* Driver & Vehicle Details Card */}
+              <div className="card" style={{ padding: 24 }}>
+                <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 14 }}>
+                  <span style={{ fontSize: 20 }}>🚗</span>
+                  <h3 style={{ margin: 0, fontSize: 18, fontFamily: 'var(--font-display)' }}>
+                    Your Driver & Vehicle
+                  </h3>
+                </div>
+
+                <div
+                  style={{
+                    display: 'flex',
+                    alignItems: 'center',
+                    justifyContent: 'space-between',
+                    background: 'var(--bg-elevated)',
+                    borderRadius: 12,
+                    padding: '14px 16px',
+                    flexWrap: 'wrap',
+                    gap: 12,
+                  }}
+                >
+                  <div>
+                    <div style={{ fontSize: 16, fontWeight: 700 }}>
+                      {activeRide.driverId?.userId?.name || 'Assigned Driver'}
+                    </div>
+                    <div style={{ fontSize: 13, color: 'var(--text-secondary)', marginTop: 2 }}>
+                      {activeRide.driverId?.userId?.phone ? `📞 ${activeRide.driverId.userId.phone}` : 'Driver on GoCab'}
+                    </div>
+                  </div>
+                  {activeRide.driverId?.rating ? (
+                    <div
+                      style={{
+                        background: 'rgba(245, 158, 11, 0.15)',
+                        border: '1px solid rgba(245, 158, 11, 0.3)',
+                        borderRadius: 8,
+                        padding: '6px 10px',
+                        display: 'flex',
+                        alignItems: 'center',
+                        gap: 6,
+                        fontWeight: 700,
+                        color: 'var(--amber)',
+                        fontSize: 14,
+                      }}
+                    >
+                      ⭐ {activeRide.driverId.rating.average.toFixed(1)}
+                      <span style={{ fontSize: 11, color: 'var(--text-muted)', fontWeight: 400 }}>
+                        ({activeRide.driverId.rating.count} reviews)
+                      </span>
+                    </div>
+                  ) : null}
+                </div>
+
+                {activeRide.driverId?.vehicleInfo ? (
+                  <div
+                    style={{
+                      marginTop: 12,
+                      display: 'grid',
+                      gridTemplateColumns: 'repeat(auto-fit, minmax(130px, 1fr))',
+                      gap: 8,
+                    }}
+                  >
+                    <div style={{ background: 'var(--bg-elevated)', borderRadius: 8, padding: '8px 12px' }}>
+                      <div style={{ fontSize: 11, color: 'var(--text-muted)', textTransform: 'uppercase' }}>Vehicle</div>
+                      <div style={{ fontSize: 13, fontWeight: 600, color: 'var(--text-primary)', marginTop: 2 }}>
+                        {activeRide.driverId.vehicleInfo.make} {activeRide.driverId.vehicleInfo.model}
+                      </div>
+                    </div>
+                    <div style={{ background: 'var(--bg-elevated)', borderRadius: 8, padding: '8px 12px' }}>
+                      <div style={{ fontSize: 11, color: 'var(--text-muted)', textTransform: 'uppercase' }}>Plate No.</div>
+                      <div style={{ fontSize: 13, fontWeight: 700, color: 'var(--amber)', marginTop: 2 }}>
+                        {activeRide.driverId.vehicleInfo.licensePlate}
+                      </div>
+                    </div>
+                    <div style={{ background: 'var(--bg-elevated)', borderRadius: 8, padding: '8px 12px' }}>
+                      <div style={{ fontSize: 11, color: 'var(--text-muted)', textTransform: 'uppercase' }}>Color</div>
+                      <div style={{ fontSize: 13, fontWeight: 600, color: 'var(--text-primary)', marginTop: 2, textTransform: 'capitalize' }}>
+                        {activeRide.driverId.vehicleInfo.color}
+                      </div>
+                    </div>
+                  </div>
+                ) : null}
+              </div>
+
+              {/* Driver Rating Card */}
+              <div
+                className="card"
+                style={{
+                  padding: 24,
+                  border: activeRide.rating ? '1px solid rgba(16, 185, 129, 0.3)' : '1px solid var(--border)',
+                }}
+              >
+                <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 12 }}>
+                  <span style={{ fontSize: 20 }}>⭐</span>
+                  <h3 style={{ margin: 0, fontSize: 18, fontFamily: 'var(--font-display)' }}>
+                    {activeRide.rating ? 'Driver Rating' : 'Rate Your Trip'}
+                  </h3>
+                </div>
+
+                {activeRide.rating ? (
+                  <div
+                    style={{
+                      textAlign: 'center',
+                      padding: '16px 20px',
+                      background: 'rgba(16, 185, 129, 0.08)',
+                      borderRadius: 12,
+                      border: '1px solid rgba(16, 185, 129, 0.2)',
+                    }}
+                  >
+                    <div style={{ fontSize: 32, marginBottom: 6, letterSpacing: 4 }}>
+                      {'⭐'.repeat(activeRide.rating)}
+                    </div>
+                    <div style={{ fontSize: 15, fontWeight: 700, color: 'var(--text-primary)' }}>
+                      You rated this trip {activeRide.rating} out of 5 stars
+                    </div>
+                    <p style={{ margin: '6px 0 0', fontSize: 13, color: 'var(--text-secondary)' }}>
+                      Thank you for sharing your feedback and keeping GoCab safe and reliable!
+                    </p>
+                  </div>
+                ) : (
+                  <div>
+                    <p style={{ fontSize: 14, color: 'var(--text-secondary)', marginBottom: 16 }}>
+                      How was your ride with {activeRide.driverId?.userId?.name || 'your driver'}? Tap a star to submit your review:
+                    </p>
+                    <div
+                      style={{
+                        display: 'flex',
+                        alignItems: 'center',
+                        justifyContent: 'center',
+                        gap: 12,
+                        padding: '14px 0',
+                        background: 'var(--bg-elevated)',
+                        borderRadius: 12,
+                      }}
+                    >
+                      {[1, 2, 3, 4, 5].map((star) => (
+                        <button
+                          key={star}
+                          type="button"
+                          onClick={() => handleRateDriver(star)}
+                          onMouseEnter={() => setHoverRating(star)}
+                          onMouseLeave={() => setHoverRating(0)}
+                          disabled={submittingRating}
+                          style={{
+                            background: 'none',
+                            border: 'none',
+                            cursor: submittingRating ? 'not-allowed' : 'pointer',
+                            fontSize: 34,
+                            padding: '4px 6px',
+                            transition: 'transform 0.15s, opacity 0.15s',
+                            transform: (hoverRating || 0) >= star ? 'scale(1.25)' : 'scale(1)',
+                            opacity: (hoverRating || 0) >= star || (!hoverRating && star <= 5) ? 1 : 0.4,
+                            filter: (hoverRating || 0) >= star ? 'drop-shadow(0 0 6px rgba(245, 158, 11, 0.6))' : 'none',
+                          }}
+                          title={`Rate ${star} star${star > 1 ? 's' : ''}`}
+                        >
+                          ⭐
+                        </button>
+                      ))}
+                    </div>
+                    {submittingRating ? (
+                      <div style={{ textAlign: 'center', marginTop: 10, color: 'var(--text-muted)', fontSize: 13 }}>
+                        Submitting rating…
+                      </div>
+                    ) : hoverRating > 0 ? (
+                      <div style={{ textAlign: 'center', marginTop: 10, color: 'var(--amber)', fontSize: 13, fontWeight: 600 }}>
+                        {hoverRating === 5 ? 'Excellent!' : hoverRating === 4 ? 'Great ride' : hoverRating === 3 ? 'Good' : hoverRating === 2 ? 'Fair' : 'Poor'}
+                      </div>
+                    ) : null}
+                  </div>
+                )}
+              </div>
+            </div>
+
+            {/* Right Column: Route Map & Navigation Details */}
+            <div style={{ display: 'flex', flexDirection: 'column', gap: 16 }}>
+              <div className="card" style={{ padding: 20 }}>
+                <div className="flex-between" style={{ marginBottom: 12 }}>
+                  <div>
+                    <h3 style={{ margin: 0, fontSize: 16, fontFamily: 'var(--font-display)' }}>
+                      Completed Route
+                    </h3>
+                    <p style={{ margin: 0, fontSize: 12, color: 'var(--text-secondary)' }}>
+                      Route map from pickup to drop-off
+                    </p>
+                  </div>
+                  <div style={{ display: 'flex', gap: 6 }}>
+                    <button className="btn btn-ghost btn-sm" onClick={toggleMapType} disabled={!mapsReady}>
+                      Toggle View
+                    </button>
+                    <button className="btn btn-ghost btn-sm" onClick={refreshMap} disabled={mapRefreshing}>
+                      {mapRefreshing ? 'Refreshing…' : '↻ Refresh'}
+                    </button>
+                  </div>
+                </div>
+
+                <div className="map-shell" style={{ borderRadius: 12, overflow: 'hidden', height: 420 }}>
+                  <div ref={mapContainerRef} className="map-canvas map-canvas-driver" style={{ height: '100%' }} />
+                  {!mapsReady && !mapsError ? <div className="map-overlay">Loading map...</div> : null}
+                  {mapsError ? <div className="map-overlay map-overlay-error">{mapsError}</div> : null}
+                </div>
+
+                {navigationInfo ? (
+                  <div className="map-meta-grid" style={{ marginTop: 12 }}>
+                    <div className="map-meta-card">
+                      <span className="map-meta-label">Route Distance</span>
+                      <strong>{navigationInfo.distanceText || `${activeRide.distance} km`}</strong>
+                    </div>
+                    <div className="map-meta-card">
+                      <span className="map-meta-label">Route Duration</span>
+                      <strong>{navigationInfo.durationText || `${activeRide.estimatedDuration || 15} mins`}</strong>
+                    </div>
+                    <div className="map-meta-card">
+                      <span className="map-meta-label">Status</span>
+                      <strong style={{ color: 'var(--success)' }}>Completed</strong>
+                    </div>
+                  </div>
+                ) : null}
+              </div>
+
+              {/* Additional Quick Actions */}
+              <div
+                className="card"
+                style={{
+                  padding: '18px 20px',
+                  display: 'flex',
+                  alignItems: 'center',
+                  justifyContent: 'space-between',
+                  gap: 12,
+                  flexWrap: 'wrap',
+                }}
+              >
+                <div>
+                  <strong style={{ display: 'block', fontSize: 14 }}>Need another cab right now?</strong>
+                  <span style={{ fontSize: 12, color: 'var(--text-secondary)' }}>
+                    Quick booking with upfront pricing and nearby drivers
+                  </span>
+                </div>
+                <button
+                  type="button"
+                  className="btn btn-primary btn-sm"
+                  onClick={handleBookAnotherRide}
+                >
+                  + Book New Ride
+                </button>
+              </div>
+            </div>
+          </div>
+        </div>
+      </div>
+    );
+  }
+
+  // Active / Ongoing Trip View
   return (
     <div className="page">
       <div className="container" style={{ maxWidth: 1200 }}>

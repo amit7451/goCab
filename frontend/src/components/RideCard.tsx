@@ -43,6 +43,8 @@ export default function RideCard({ ride, onUpdate, nowMs }: RideCardProps): Reac
     : 0;
   const canBoost = ride.status === 'requested' && secondsLeft > 0;
   const hasLiveTracking = ['requested', 'accepted', 'in_progress'].includes(ride.status);
+  const isCompleted = ride.status === 'completed';
+  const hasRideDetails = hasLiveTracking || isCompleted;
 
   const openRideDetails = (): void => {
     navigate(`/current-ride?rideId=${ride._id}`);
@@ -114,13 +116,13 @@ export default function RideCard({ ride, onUpdate, nowMs }: RideCardProps): Reac
         display: 'flex',
         flexDirection: 'column',
         gap: 16,
-        cursor: hasLiveTracking ? 'pointer' : 'default',
+        cursor: hasRideDetails ? 'pointer' : 'default',
         transition: 'transform 0.15s, border-color 0.15s',
       }}
-      onClick={hasLiveTracking ? handleCardClick : undefined}
-      onKeyDown={hasLiveTracking ? handleCardKeyDown : undefined}
-      tabIndex={hasLiveTracking ? 0 : undefined}
-      role={hasLiveTracking ? 'button' : undefined}
+      onClick={hasRideDetails ? handleCardClick : undefined}
+      onKeyDown={hasRideDetails ? handleCardKeyDown : undefined}
+      tabIndex={hasRideDetails ? 0 : undefined}
+      role={hasRideDetails ? 'button' : undefined}
     >
       {/* Header */}
       <div className="flex-between">
@@ -228,6 +230,16 @@ export default function RideCard({ ride, onUpdate, nowMs }: RideCardProps): Reac
             className="btn btn-primary btn-sm"
           >
             🗺️ Live Tracking
+          </button>
+        )}
+
+        {isCompleted && (
+          <button
+            type="button"
+            onClick={openRideDetails}
+            className="btn btn-secondary btn-sm"
+          >
+            🧾 View Receipt
           </button>
         )}
 

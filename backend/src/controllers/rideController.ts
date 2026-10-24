@@ -13,12 +13,6 @@ import {
   getIO,
 } from '../services/socketService';
 
-const randomDistanceKm = (): number => {
-  const minKm = 2;
-  const maxKm = 22;
-  return Math.floor(Math.random() * (maxKm - minKm + 1)) + minKm;
-};
-
 const normalizeDistanceKm = ({
   distance,
   pickup,
@@ -38,7 +32,7 @@ const normalizeDistanceKm = ({
     return Number(haversine!.toFixed(2));
   }
 
-  return randomDistanceKm();
+  return 1;
 };
 
 const normalizeDurationMinutes = ({

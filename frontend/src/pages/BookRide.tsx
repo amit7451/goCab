@@ -3,7 +3,7 @@ import { useNavigate } from 'react-router-dom';
 import toast from 'react-hot-toast';
 import API from '../api/axios';
 import { loadGoogleMapsApi } from '../utils/googleMaps';
-import { resolveAddressCoordinates } from '../utils/geocoding';
+import { geocodeAddress, reverseGeocodeCoords } from '../utils/geocoding';
 import { FareBreakdown, Location, PaymentMethod, RideType } from '../types';
 
 const INDIA_CENTER = { lat: 20.5937, lng: 78.9629 };
@@ -86,9 +86,6 @@ export default function BookRide(): React.ReactElement {
     () => quotes.find((quote) => quote.rideType === form.rideType) || null,
     [quotes, form.rideType]
   );
-
-  const estimatedDistanceKm = routeInfo?.distanceKm || selectedQuote?.distanceKm || 0;
-  const estimatedFare = selectedQuote?.total || 0;
 
   const setMarker = (key: string, options: any) => {
     const maps = googleMapsRef.current;
@@ -262,49 +259,25 @@ export default function BookRide(): React.ReactElement {
     }
   }, [pickupPlace, dropoffPlace]);
 
-  // Fetch Fare Quotes whenever route or addon changes
+  // Fetch Fare Quotes from real API whenever route or addon changes
   useEffect(() => {
-    const dist = routeInfo?.distanceKm || 8;
-    const dur = routeInfo?.durationMin || 20;
+    if (!routeInfo?.distanceKm || !routeInfo?.durationMin) {
+      setQuotes([]);
+      return;
+    }
 
     setQuoteLoading(true);
     API.post('/rides/quote', {
-      distance: dist,
-      estimatedDuration: dur,
+      distance: routeInfo.distanceKm,
+      estimatedDuration: routeInfo.durationMin,
       userPriceAddon,
     })
       .then((res) => {
         setQuotes(res.data.quotes || []);
       })
-      .catch(() => {
-        // Fallback local quotes
-        const fallbackRates: Record<RideType, { base: number; perKm: number }> = {
-          economy: { base: 35, perKm: 11 },
-          comfort: { base: 55, perKm: 16 },
-          premium: { base: 90, perKm: 24 },
-        };
-        const generated: FareBreakdown[] = (['economy', 'comfort', 'premium'] as RideType[]).map(
-          (t) => {
-            const rule = fallbackRates[t];
-            const baseFare = rule.base;
-            const distanceFare = dist * rule.perKm;
-            const total = Math.round(baseFare + distanceFare + userPriceAddon);
-            return {
-              rideType: t,
-              baseFare,
-              distanceFare,
-              timeFare: 0,
-              trafficMultiplier: 1,
-              trafficCharge: 0,
-              userPriceAddon,
-              subtotal: baseFare + distanceFare,
-              total,
-              distanceKm: dist,
-              durationMin: dur,
-            };
-          }
-        );
-        setQuotes(generated);
+      .catch((err) => {
+        setQuotes([]);
+        toast.error(err.response?.data?.message || 'Failed to fetch fare quotes');
       })
       .finally(() => setQuoteLoading(false));
   }, [routeInfo?.distanceKm, routeInfo?.durationMin, userPriceAddon]);
@@ -318,26 +291,15 @@ export default function BookRide(): React.ReactElement {
     navigator.geolocation.getCurrentPosition(
       async (pos) => {
         const coords = { lat: pos.coords.latitude, lng: pos.coords.longitude };
+        const address = await reverseGeocodeCoords(coords, geocoderRef.current);
+        const resolvedAddress = address || `GPS Location (${coords.lat.toFixed(4)}, ${coords.lng.toFixed(4)})`;
 
-        const maps = googleMapsRef.current;
-        if (geocoderRef.current && maps) {
-          geocoderRef.current.geocode({ location: coords }, (results: any, status: string) => {
-            setLocationLoading(false);
-            if (status === 'OK' && results?.[0]) {
-              const address = results[0].formatted_address;
-              const place: Location = { address, ...coords };
-              setPickupPlace(place);
-              setForm((prev) => ({ ...prev, pickupAddress: address }));
-              mapRef.current?.panTo(coords);
-              mapRef.current?.setZoom(15);
-            }
-          });
-        } else {
-          setLocationLoading(false);
-          const fallbackLoc: Location = { address: `Current Location (${coords.lat.toFixed(4)}, ${coords.lng.toFixed(4)})`, ...coords };
-          setPickupPlace(fallbackLoc);
-          setForm((prev) => ({ ...prev, pickupAddress: fallbackLoc.address }));
-        }
+        const place: Location = { address: resolvedAddress, ...coords };
+        setPickupPlace(place);
+        setForm((prev) => ({ ...prev, pickupAddress: resolvedAddress }));
+        mapRef.current?.panTo(coords);
+        mapRef.current?.setZoom(15);
+        setLocationLoading(false);
       },
       () => {
         setLocationLoading(false);
@@ -350,16 +312,20 @@ export default function BookRide(): React.ReactElement {
   const handlePickupBlur = async (): Promise<void> => {
     const text = form.pickupAddress.trim();
     if (text && (!pickupPlace || pickupPlace.address !== text)) {
-      const resolved = await resolveAddressCoordinates(text, geocoderRef.current);
-      setPickupPlace(resolved);
+      const resolved = await geocodeAddress(text, geocoderRef.current);
+      if (resolved) {
+        setPickupPlace(resolved);
+      }
     }
   };
 
   const handleDropoffBlur = async (): Promise<void> => {
     const text = form.dropoffAddress.trim();
     if (text && (!dropoffPlace || dropoffPlace.address !== text)) {
-      const resolved = await resolveAddressCoordinates(text, geocoderRef.current);
-      setDropoffPlace(resolved);
+      const resolved = await geocodeAddress(text, geocoderRef.current);
+      if (resolved) {
+        setDropoffPlace(resolved);
+      }
     }
   };
 
@@ -381,17 +347,32 @@ export default function BookRide(): React.ReactElement {
 
     setLoading(true);
     try {
-      // Ensure pickup and dropoff ALWAYS have valid, non-zero coordinates
       let finalPickup = pickupPlace;
-      if (!finalPickup || !finalPickup.lat || !finalPickup.lng || finalPickup.address !== cleanPickup) {
-        finalPickup = await resolveAddressCoordinates(cleanPickup, geocoderRef.current);
+      if (!finalPickup || finalPickup.address !== cleanPickup) {
+        finalPickup = await geocodeAddress(cleanPickup, geocoderRef.current);
+        if (!finalPickup) {
+          toast.error(`Could not locate pickup address: "${cleanPickup}". Please choose from suggestions or enter a valid address.`);
+          setLoading(false);
+          return;
+        }
         setPickupPlace(finalPickup);
       }
 
       let finalDropoff = dropoffPlace;
-      if (!finalDropoff || !finalDropoff.lat || !finalDropoff.lng || finalDropoff.address !== cleanDropoff) {
-        finalDropoff = await resolveAddressCoordinates(cleanDropoff, geocoderRef.current);
+      if (!finalDropoff || finalDropoff.address !== cleanDropoff) {
+        finalDropoff = await geocodeAddress(cleanDropoff, geocoderRef.current);
+        if (!finalDropoff) {
+          toast.error(`Could not locate drop-off address: "${cleanDropoff}". Please choose from suggestions or enter a valid address.`);
+          setLoading(false);
+          return;
+        }
         setDropoffPlace(finalDropoff);
+      }
+
+      if (!routeInfo?.distanceKm) {
+        toast.error('Waiting for route calculation. Please verify your locations.');
+        setLoading(false);
+        return;
       }
 
       const payload = {
@@ -399,8 +380,8 @@ export default function BookRide(): React.ReactElement {
         dropoff: finalDropoff,
         rideType: form.rideType,
         paymentMethod: form.paymentMethod,
-        distance: routeInfo?.distanceKm || estimatedDistanceKm || 8,
-        estimatedDuration: routeInfo?.durationMin || 20,
+        distance: routeInfo.distanceKm,
+        estimatedDuration: routeInfo.durationMin,
         userPriceAddon,
       };
 
@@ -532,7 +513,7 @@ export default function BookRide(): React.ReactElement {
                             color: isSelected ? 'var(--amber)' : 'var(--text-primary)',
                           }}
                         >
-                          {quoteLoading ? '…' : `₹${quote?.total || (rt.id === 'economy' ? 120 : rt.id === 'comfort' ? 190 : 280)}`}
+                          {quoteLoading ? '…' : quote ? `₹${quote.total}` : '—'}
                         </div>
                       </button>
                     );
@@ -622,7 +603,7 @@ export default function BookRide(): React.ReactElement {
                 <div>
                   <div style={{ fontSize: 12, color: 'var(--text-muted)' }}>Estimated Total</div>
                   <div style={{ fontSize: 13, color: 'var(--text-secondary)' }}>
-                    {routeInfo ? `${routeInfo.distanceText} · ${routeInfo.durationText}` : '~8 km estimated'}
+                    {routeInfo ? `${routeInfo.distanceText} · ${routeInfo.durationText}` : 'Select pickup & drop-off'}
                   </div>
                 </div>
                 <div
@@ -633,15 +614,21 @@ export default function BookRide(): React.ReactElement {
                     color: 'var(--amber)',
                   }}
                 >
-                  ₹{estimatedFare || (form.rideType === 'economy' ? 120 : form.rideType === 'comfort' ? 190 : 280)}
+                  {quoteLoading ? '…' : selectedQuote ? `₹${selectedQuote.total}` : '—'}
                 </div>
               </div>
 
-              <button type="submit" className="btn btn-primary btn-full btn-lg" disabled={loading}>
+              <button
+                type="submit"
+                className="btn btn-primary btn-full btn-lg"
+                disabled={loading || !routeInfo}
+              >
                 {loading ? (
                   <>
                     <div className="spinner" style={{ width: 18, height: 18 }} /> Booking ride…
                   </>
+                ) : !routeInfo ? (
+                  'Select Route to Book'
                 ) : (
                   '🚕 Request Cab Now'
                 )}

@@ -11,47 +11,12 @@ const getEnvMapsApiKey = (): string =>
   String(import.meta.env.VITE_GOOGLE_MAPS_API_KEY || '').trim();
 
 const getBackendMapsApiKey = async (): Promise<string> => {
-  const candidates: Array<() => Promise<string>> = [];
-
-  candidates.push(async () => {
-    const response = await API.get('/maps/config');
-    return String(response?.data?.mapsApiKey || '').trim();
-  });
-
-  candidates.push(async () => {
-    const response = await fetch('/api/maps/config', { credentials: 'omit' });
-    const data = await response.json().catch(() => ({}));
-    if (!response.ok) {
-      throw new Error(data?.message || `Maps config request failed (${response.status})`);
-    }
-    return String(data?.mapsApiKey || '').trim();
-  });
-
-  const externalBase = String(import.meta.env.VITE_API_URL || '').trim();
-  if (externalBase) {
-    const normalizedBase = externalBase.replace(/\/+$/, '');
-    const withApiSuffix = /\/api$/i.test(normalizedBase) ? normalizedBase : `${normalizedBase}/api`;
-    candidates.push(async () => {
-      const response = await fetch(`${withApiSuffix}/maps/config`, { credentials: 'omit' });
-      const data = await response.json().catch(() => ({}));
-      if (!response.ok) {
-        throw new Error(data?.message || `Maps config request failed (${response.status})`);
-      }
-      return String(data?.mapsApiKey || '').trim();
-    });
+  const response = await API.get('/maps/config');
+  const key = String(response?.data?.mapsApiKey || '').trim();
+  if (!key) {
+    throw new Error('Google Maps API key is not configured in backend');
   }
-
-  let lastError: any = null;
-  for (const loadCandidate of candidates) {
-    try {
-      const key = await loadCandidate();
-      if (key) return key;
-    } catch (error) {
-      lastError = error;
-    }
-  }
-
-  throw lastError || new Error('Google Maps API key is empty');
+  return key;
 };
 
 export const resolveMapsApiKey = async (): Promise<string> => {

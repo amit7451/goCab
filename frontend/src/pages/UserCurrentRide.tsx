@@ -257,21 +257,24 @@ export default function UserCurrentRide(): React.ReactElement {
     };
   }, [activeRide?._id, fetchRides]);
 
-  // Load Google Maps API
+  // Load Google Maps API & initialize map canvas once trip details and container are mounted
   useEffect(() => {
     let disposed = false;
+
+    if (loading || !activeRide || !mapContainerRef.current) return;
+    if (mapRef.current) return;
 
     (async () => {
       try {
         const maps = await loadGoogleMapsApi();
-        if (disposed || !mapContainerRef.current) return;
+        if (disposed || !mapContainerRef.current || mapRef.current) return;
 
         mapRef.current = new maps.Map(mapContainerRef.current, {
           center: INDIA_CENTER,
           zoom: 5,
           minZoom: 4,
           maxZoom: 19,
-          mapTypeId: 'roadmap',
+          mapTypeId: mapTypeRef.current || 'roadmap',
           streetViewControl: false,
           fullscreenControl: true,
           mapTypeControl: true,
@@ -289,17 +292,24 @@ export default function UserCurrentRide(): React.ReactElement {
         });
 
         setMapsReady(true);
+        setMapsError('');
       } catch (error: any) {
-        setMapsError(error?.message || 'Failed to load map');
+        if (!disposed) {
+          setMapsError(error?.message || 'Failed to load map');
+        }
       }
     })();
 
     return () => {
       disposed = true;
-      if (watchIdRef.current !== null && navigator.geolocation) {
-        navigator.geolocation.clearWatch(watchIdRef.current);
-      }
+    };
+  }, [loading, activeRide?._id, mapRefreshTick]);
+
+  // Teardown map on final unmount
+  useEffect(() => {
+    return () => {
       directionsRendererRef.current?.setMap(null);
+      mapRef.current = null;
     };
   }, []);
 
@@ -500,6 +510,10 @@ export default function UserCurrentRide(): React.ReactElement {
 
   const refreshMap = () => {
     lastRouteRef.current = null;
+    if (!mapRef.current) {
+      setMapsError('');
+      setMapsReady(false);
+    }
     setMapRefreshTick((tick) => tick + 1);
     toast.success('Map updated');
   };
@@ -748,7 +762,7 @@ export default function UserCurrentRide(): React.ReactElement {
             type="button"
             className="btn btn-ghost btn-sm"
             onClick={refreshMap}
-            disabled={!mapsReady || mapRefreshing}
+            disabled={mapRefreshing}
             style={{ position: 'absolute', right: 14, top: 14, zIndex: 3 }}
           >
             {mapRefreshing ? 'Refreshing...' : 'Refresh Map'}

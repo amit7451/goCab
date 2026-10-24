@@ -179,6 +179,9 @@ const loadScript = async (apiKey: string): Promise<any> =>
       window.clearTimeout(timeoutId);
       reject(new Error('Failed to load Google Maps script'));
     };
+    (window as any).gm_authFailure = () => {
+      console.warn('Google Maps API authentication warning: Please verify your Google Cloud Maps API key restrictions and billing.');
+    };
 
     document.head.appendChild(script);
   });

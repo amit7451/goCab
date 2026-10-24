@@ -329,8 +329,12 @@ export default function DriverCurrentRide(): React.ReactElement {
     }
 
     if (isValidCoords(driverLocation)) {
-      setMarker('driver', driverLocation, 'Driver', null, null);
-      markerRefs.current.driver?.setIcon('https://maps.gstatic.com/mapfiles/ms2/micons/cabs.png');
+      setMarker('driver', driverLocation, 'Your Cab', null, null);
+      markerRefs.current.driver?.setIcon({
+        url: '/taxi.svg',
+        scaledSize: new maps.Size(36, 36),
+        anchor: new maps.Point(18, 18),
+      });
     }
     if (isValidCoords(activeRide.pickup)) {
       setMarker('pickup', toCoords(activeRide.pickup), 'Pickup', '#f59e0b', {

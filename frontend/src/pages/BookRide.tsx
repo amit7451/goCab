@@ -3,6 +3,7 @@ import { useNavigate } from 'react-router-dom';
 import toast from 'react-hot-toast';
 import API from '../api/axios';
 import { loadGoogleMapsApi } from '../utils/googleMaps';
+import { resolveAddressCoordinates } from '../utils/geocoding';
 import { FareBreakdown, Location, PaymentMethod, RideType } from '../types';
 
 const INDIA_CENTER = { lat: 20.5937, lng: 78.9629 };
@@ -346,24 +347,56 @@ export default function BookRide(): React.ReactElement {
     );
   };
 
+  const handlePickupBlur = async (): Promise<void> => {
+    const text = form.pickupAddress.trim();
+    if (text && (!pickupPlace || pickupPlace.address !== text)) {
+      const resolved = await resolveAddressCoordinates(text, geocoderRef.current);
+      setPickupPlace(resolved);
+    }
+  };
+
+  const handleDropoffBlur = async (): Promise<void> => {
+    const text = form.dropoffAddress.trim();
+    if (text && (!dropoffPlace || dropoffPlace.address !== text)) {
+      const resolved = await resolveAddressCoordinates(text, geocoderRef.current);
+      setDropoffPlace(resolved);
+    }
+  };
+
   const handleSubmit = async (e: React.FormEvent): Promise<void> => {
     e.preventDefault();
 
-    if (!form.pickupAddress.trim() || !form.dropoffAddress.trim()) {
+    const cleanPickup = form.pickupAddress.trim();
+    const cleanDropoff = form.dropoffAddress.trim();
+
+    if (!cleanPickup || !cleanDropoff) {
       toast.error('Please enter both pickup and drop-off locations');
       return;
     }
 
-    if (form.pickupAddress.trim().toLowerCase() === form.dropoffAddress.trim().toLowerCase()) {
+    if (cleanPickup.toLowerCase() === cleanDropoff.toLowerCase()) {
       toast.error('Pickup and drop-off cannot be the same address');
       return;
     }
 
     setLoading(true);
     try {
+      // Ensure pickup and dropoff ALWAYS have valid, non-zero coordinates
+      let finalPickup = pickupPlace;
+      if (!finalPickup || !finalPickup.lat || !finalPickup.lng || finalPickup.address !== cleanPickup) {
+        finalPickup = await resolveAddressCoordinates(cleanPickup, geocoderRef.current);
+        setPickupPlace(finalPickup);
+      }
+
+      let finalDropoff = dropoffPlace;
+      if (!finalDropoff || !finalDropoff.lat || !finalDropoff.lng || finalDropoff.address !== cleanDropoff) {
+        finalDropoff = await resolveAddressCoordinates(cleanDropoff, geocoderRef.current);
+        setDropoffPlace(finalDropoff);
+      }
+
       const payload = {
-        pickup: pickupPlace || { address: form.pickupAddress.trim() },
-        dropoff: dropoffPlace || { address: form.dropoffAddress.trim() },
+        pickup: finalPickup,
+        dropoff: finalDropoff,
         rideType: form.rideType,
         paymentMethod: form.paymentMethod,
         distance: routeInfo?.distanceKm || estimatedDistanceKm || 8,
@@ -422,6 +455,7 @@ export default function BookRide(): React.ReactElement {
                     name="pickupAddress"
                     placeholder="Enter pickup address or landmark…"
                     value={form.pickupAddress}
+                    onBlur={handlePickupBlur}
                     onChange={(e) => {
                       setForm({ ...form, pickupAddress: e.target.value });
                       if (!e.target.value) setPickupPlace(null);
@@ -443,6 +477,7 @@ export default function BookRide(): React.ReactElement {
                     name="dropoffAddress"
                     placeholder="Enter destination address…"
                     value={form.dropoffAddress}
+                    onBlur={handleDropoffBlur}
                     onChange={(e) => {
                       setForm({ ...form, dropoffAddress: e.target.value });
                       if (!e.target.value) setDropoffPlace(null);

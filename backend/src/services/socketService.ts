@@ -84,10 +84,16 @@ export const initSocketServer = (httpServer: HttpServer): Server => {
         if (!ride) return;
 
         const rideUserId = (ride.userId as any)?._id || ride.userId;
-        const isPassenger = rideUserId.toString() === user._id.toString();
+        const isPassenger = rideUserId && rideUserId.toString() === user._id.toString();
 
+        let currentDriver = driver;
+        if (!currentDriver && user.role === 'driver') {
+          currentDriver = await Driver.findOne({ userId: user._id });
+        }
+
+        const rideDriverId = (ride.driverId as any)?._id || ride.driverId;
         const isAssignedDriver =
-          driver && ride.driverId && ride.driverId.toString() === driver._id.toString();
+          currentDriver && rideDriverId && rideDriverId.toString() === currentDriver._id.toString();
 
         // Only the passenger and assigned driver are authorized into the private ride room
         if (isPassenger || isAssignedDriver) {
@@ -115,30 +121,58 @@ export const initSocketServer = (httpServer: HttpServer): Server => {
         address?: string;
       }) => {
         try {
-          if (user.role !== 'driver' || !driver) return;
+          let currentDriver = driver;
+          if (!currentDriver && user.role === 'driver') {
+            currentDriver = await Driver.findOne({ userId: user._id });
+          }
+          if (user.role !== 'driver' || !currentDriver) return;
 
           const { rideId, lat, lng, address } = payload;
           if (!isValidLatLng({ lat, lng })) return;
 
           // Update driver's location in DB
-          driver.currentLocation = {
+          currentDriver.currentLocation = {
             address: address || '',
             lat,
             lng,
           };
-          await driver.save();
+          await currentDriver.save();
 
           const updateData = {
-            driverId: driver._id.toString(),
+            driverId: currentDriver._id.toString(),
             lat,
             lng,
             address: address || '',
             updatedAt: new Date().toISOString(),
           };
 
-          // If on an active ride, broadcast live to passenger in ride room
-          if (rideId && mongoose.isValidObjectId(rideId)) {
-            io?.to(`ride:${rideId}`).emit('driver:location_changed', updateData);
+          let targetRideId = rideId;
+          let passengerUserId: string | null = null;
+
+          if (targetRideId && mongoose.isValidObjectId(targetRideId)) {
+            const ride = await Ride.findById(targetRideId).select('userId status');
+            if (ride) {
+              passengerUserId = ((ride.userId as any)?._id || ride.userId)?.toString() || null;
+            }
+          } else {
+            // If rideId omitted, locate any active trip currently undertaken by this driver
+            const activeRide = await Ride.findOne({
+              driverId: currentDriver._id,
+              status: { $in: ['accepted', 'in_progress'] },
+            }).select('userId');
+            if (activeRide) {
+              targetRideId = activeRide._id.toString();
+              passengerUserId = ((activeRide.userId as any)?._id || activeRide.userId)?.toString() || null;
+            }
+          }
+
+          // Broadcast to ride room
+          if (targetRideId) {
+            io?.to(`ride:${targetRideId}`).emit('driver:location_changed', updateData);
+          }
+          // Direct broadcast to passenger personal room ensures delivery even if ride room join is in flight
+          if (passengerUserId) {
+            io?.to(`user:${passengerUserId}`).emit('driver:location_changed', updateData);
           }
         } catch (err) {
           console.error('Error handling driver location update:', err);

@@ -545,6 +545,66 @@ h1, h2, h3, h4 {
   margin-left: 5px;
 }
 
+/* ---- Map Shell & Canvas ---- */
+.map-shell {
+  position: relative;
+  width: 100%;
+  border-radius: var(--radius-lg);
+  overflow: hidden;
+  border: 1px solid var(--border);
+  background: var(--bg-card);
+  box-shadow: var(--shadow);
+}
+
+.map-canvas {
+  width: 100%;
+  border-radius: inherit;
+}
+
+.map-overlay {
+  position: absolute;
+  inset: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: rgba(8, 14, 30, 0.85);
+  backdrop-filter: blur(6px);
+  color: var(--text-primary);
+  font-size: 14px;
+  font-weight: 500;
+  z-index: 2;
+  text-align: center;
+  padding: 24px;
+}
+
+.map-overlay-error {
+  color: var(--danger);
+  background: rgba(8, 14, 30, 0.92);
+}
+
+.map-meta-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(130px, 1fr));
+  gap: 12px;
+}
+
+.map-meta-card {
+  background: var(--bg-card);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  padding: 12px 16px;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.map-meta-label {
+  font-size: 11px;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+  color: var(--text-muted);
+}
+
 /* ---- Responsive ---- */
 @media (max-width: 640px) {
   .auth-card { padding: 28px 20px; }
@@ -552,3 +612,4 @@ h1, h2, h3, h4 {
   .rides-grid { grid-template-columns: 1fr; }
   .stats-grid { grid-template-columns: 1fr 1fr; }
 }
+

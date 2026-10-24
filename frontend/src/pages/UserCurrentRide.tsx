@@ -142,10 +142,15 @@ export default function UserCurrentRide(): React.ReactElement {
     if (isDriverSearching) {
       return isValidCoords(activeRide.pickup) ? toCoords(activeRide.pickup) : null;
     }
+    if (isPrePickupPhase) {
+      if (driverLiveLocation) return driverLiveLocation;
+      return isValidCoords(activeRide.pickup) ? toCoords(activeRide.pickup) : null;
+    }
+    // In progress trip
     if (driverLiveLocation) return driverLiveLocation;
     if (isValidCoords(activeRide.pickup)) return toCoords(activeRide.pickup);
     return null;
-  }, [activeRide, driverLiveLocation, isDriverSearching]);
+  }, [activeRide, driverLiveLocation, isDriverSearching, isPrePickupPhase]);
 
   const routeTarget = useMemo(() => {
     if (!activeRide) return null;
@@ -153,11 +158,16 @@ export default function UserCurrentRide(): React.ReactElement {
       return isValidCoords(activeRide.dropoff) ? toCoords(activeRide.dropoff) : null;
     }
     if (isPrePickupPhase) {
+      if (!driverLiveLocation) {
+        // Driver not yet located: preview trip route from pickup to dropoff
+        return isValidCoords(activeRide.dropoff) ? toCoords(activeRide.dropoff) : null;
+      }
+      // Driver located: target is pickup location
       if (isValidCoords(activeRide.userLiveLocation)) return toCoords(activeRide.userLiveLocation!);
       return isValidCoords(activeRide.pickup) ? toCoords(activeRide.pickup) : null;
     }
     return isValidCoords(activeRide.dropoff) ? toCoords(activeRide.dropoff) : null;
-  }, [activeRide, isDriverSearching, isPrePickupPhase]);
+  }, [activeRide, driverLiveLocation, isDriverSearching, isPrePickupPhase]);
 
   const fetchRides = useCallback(async () => {
     try {
@@ -203,6 +213,14 @@ export default function UserCurrentRide(): React.ReactElement {
       }
     };
 
+    const onRideAccepted = (payload: any) => {
+      toast.success('🚗 Driver matched! Heading to your pickup point.');
+      if (isValidCoords(payload?.driver?.currentLocation)) {
+        setDriverRealtimeLocation(toCoords(payload.driver.currentLocation));
+      }
+      fetchRides();
+    };
+
     const onRideStatusChanged = (payload: any) => {
       if (payload?.status) {
         toast(`Ride updated: ${payload.status.replace('_', ' ')}`);
@@ -220,6 +238,7 @@ export default function UserCurrentRide(): React.ReactElement {
     };
 
     socket.on('driver:location_changed', onDriverLocationChanged);
+    socket.on('ride:accepted', onRideAccepted);
     socket.on('ride:status_changed', onRideStatusChanged);
     socket.on('ride:cancelled', onRideCancelled);
     socket.on('ride:price_boosted', onRidePriceBoosted);
@@ -231,6 +250,7 @@ export default function UserCurrentRide(): React.ReactElement {
       socket.off('connect', onConnect);
       socket.off('disconnect', onDisconnect);
       socket.off('driver:location_changed', onDriverLocationChanged);
+      socket.off('ride:accepted', onRideAccepted);
       socket.off('ride:status_changed', onRideStatusChanged);
       socket.off('ride:cancelled', onRideCancelled);
       socket.off('ride:price_boosted', onRidePriceBoosted);
@@ -373,8 +393,12 @@ export default function UserCurrentRide(): React.ReactElement {
       });
     }
     if (driverLiveLocation) {
-      setMarker('driver', driverLiveLocation, 'Driver', null, null);
-      markerRefs.current.driver?.setIcon('https://maps.gstatic.com/mapfiles/ms2/micons/cabs.png');
+      setMarker('driver', driverLiveLocation, 'Driver Cab', null, null);
+      markerRefs.current.driver?.setIcon({
+        url: '/taxi.svg',
+        scaledSize: new maps.Size(36, 36),
+        anchor: new maps.Point(18, 18),
+      });
     } else {
       hideMarker('driver');
     }
@@ -460,6 +484,9 @@ export default function UserCurrentRide(): React.ReactElement {
         const coords = { lat: position.coords.latitude, lng: position.coords.longitude };
         setUserLocation(coords);
         mapRef.current?.panTo(coords);
+        if (activeRide?._id && canSyncUserLocation) {
+          sendUserLocation(activeRide._id, coords);
+        }
         setMapRefreshTick((tick) => tick + 1);
         setMapRefreshing(false);
       },

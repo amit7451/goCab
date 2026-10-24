@@ -13,11 +13,13 @@ export const getMapsConfig = (_req: Request, res: Response): void => {
   const mapsApiKey = getConfiguredMapsApiKey().trim();
 
   if (!mapsApiKey) {
-    res.status(500).json({
-      message: 'Google Maps API key is missing. Set GOOGLE_MAPS_API_KEY in backend/.env',
+    res.json({
+      configured: false,
+      mapsApiKey: '',
+      message: 'Google Maps API key is not configured. Add GOOGLE_MAPS_API_KEY in backend/.env for Google Maps.',
     });
     return;
   }
 
-  res.json({ mapsApiKey });
+  res.json({ configured: true, mapsApiKey });
 };

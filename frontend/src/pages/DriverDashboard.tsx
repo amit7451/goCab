@@ -1,10 +1,10 @@
-import React, { useState, useEffect, useCallback } from 'react';
+import React, { useState, useEffect, useCallback, useRef } from 'react';
 import { useNavigate } from 'react-router-dom';
 import API from '../api/axios';
 import toast from 'react-hot-toast';
 import { useAuth } from '../context/AuthContext';
 import { DriverProfile, Ride, RideStatus } from '../types';
-import { connectSocket } from '../utils/socket';
+import { connectSocket, sendDriverLocation } from '../utils/socket';
 
 const STATUS_LABEL: Record<string, string> = {
   accepted: 'Pick Up Passenger',
@@ -32,6 +32,11 @@ export default function DriverDashboard(): React.ReactElement {
   const [actionLoading, setActionLoading] = useState<string>('');
   const [nowMs, setNowMs] = useState<number>(Date.now());
   const [isLiveConnected, setIsLiveConnected] = useState<boolean>(false);
+  const [driverCoords, setDriverCoords] = useState<{ lat: number; lng: number } | null>(null);
+  const [isGpsActive, setIsGpsActive] = useState<boolean>(false);
+
+  const watchIdRef = useRef<number | null>(null);
+  const lastLocationSyncRef = useRef<number>(0);
 
   const fetchAll = useCallback(async (): Promise<void> => {
     try {
@@ -97,6 +102,57 @@ export default function DriverDashboard(): React.ReactElement {
     return () => clearInterval(timer);
   }, []);
 
+  // Continuous GPS watch and location synchronization
+  useEffect(() => {
+    if (!navigator.geolocation || !profile?.isAvailable) {
+      if (watchIdRef.current !== null && navigator.geolocation) {
+        navigator.geolocation.clearWatch(watchIdRef.current);
+        watchIdRef.current = null;
+      }
+      setIsGpsActive(false);
+      return;
+    }
+
+    const onPosition = (position: GeolocationPosition) => {
+      const coords = { lat: position.coords.latitude, lng: position.coords.longitude };
+      setDriverCoords(coords);
+      setIsGpsActive(true);
+
+      // Broadcast immediately via socket to backend & any active trip
+      sendDriverLocation(undefined, coords);
+
+      // Throttle DB update to every 10 seconds
+      const now = Date.now();
+      if (now - lastLocationSyncRef.current >= 10000) {
+        lastLocationSyncRef.current = now;
+        API.put('/driver/location', { lat: coords.lat, lng: coords.lng }).catch(() => null);
+      }
+    };
+
+    const onError = () => {
+      setIsGpsActive(false);
+    };
+
+    navigator.geolocation.getCurrentPosition(onPosition, onError, {
+      enableHighAccuracy: true,
+      timeout: 10000,
+      maximumAge: 8000,
+    });
+
+    watchIdRef.current = navigator.geolocation.watchPosition(onPosition, onError, {
+      enableHighAccuracy: true,
+      timeout: 10000,
+      maximumAge: 8000,
+    });
+
+    return () => {
+      if (watchIdRef.current !== null && navigator.geolocation) {
+        navigator.geolocation.clearWatch(watchIdRef.current);
+        watchIdRef.current = null;
+      }
+    };
+  }, [profile?.isAvailable]);
+
   const toggleAvailability = async (): Promise<void> => {
     if (!profile) return;
     try {
@@ -113,6 +169,9 @@ export default function DriverDashboard(): React.ReactElement {
     setActionLoading(rideId);
     try {
       await API.put(`/driver/accept-ride/${rideId}`);
+      if (driverCoords) {
+        sendDriverLocation(rideId, driverCoords);
+      }
       toast.success('Ride accepted! Heading to trip navigation…');
       await fetchAll();
       navigate('/driver/current-ride');
@@ -181,6 +240,30 @@ export default function DriverDashboard(): React.ReactElement {
                   }}
                 />
                 {isLiveConnected ? 'Live Real-Time' : 'Polling'}
+              </span>
+              <span
+                style={{
+                  fontSize: 11,
+                  padding: '3px 8px',
+                  borderRadius: 20,
+                  fontWeight: 600,
+                  background: isGpsActive ? 'rgba(34, 197, 94, 0.15)' : 'rgba(148, 163, 184, 0.15)',
+                  color: isGpsActive ? '#22c55e' : '#94a3b8',
+                  border: `1px solid ${isGpsActive ? 'rgba(34, 197, 94, 0.3)' : 'rgba(148, 163, 184, 0.3)'}`,
+                  display: 'inline-flex',
+                  alignItems: 'center',
+                  gap: 4,
+                }}
+              >
+                <span
+                  style={{
+                    width: 6,
+                    height: 6,
+                    borderRadius: '50%',
+                    background: isGpsActive ? '#22c55e' : '#94a3b8',
+                  }}
+                />
+                {isGpsActive ? 'GPS Active' : 'GPS Offline'}
               </span>
             </div>
             <p style={{ marginTop: 4 }}>Welcome back, {user?.name?.split(' ')[0]}</p>
@@ -486,6 +569,21 @@ export default function DriverDashboard(): React.ReactElement {
                           >
                             {ride.paymentMethod}
                           </span>
+                          {ride.pickupDistanceKm != null ? (
+                            <span
+                              style={{
+                                background: 'rgba(56, 189, 248, 0.12)',
+                                color: '#38bdf8',
+                                border: '1px solid rgba(56, 189, 248, 0.3)',
+                                borderRadius: 6,
+                                padding: '4px 8px',
+                                fontSize: 11,
+                                fontWeight: 700,
+                              }}
+                            >
+                              📍 {ride.pickupDistanceKm} km away
+                            </span>
+                          ) : null}
                           {ride.userPriceAddon && ride.userPriceAddon > 0 ? (
                             <span
                               style={{

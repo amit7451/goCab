@@ -88,6 +88,7 @@ export interface IRide extends Document {
   pickupOtp?: string;
   pickupOtpGeneratedAt?: Date | null;
   pickupOtpVerifiedAt?: Date | null;
+  pickupOtpAttempts?: number;
   rideType: RideType;
   paymentMethod: PaymentMethod;
   rating: number | null;

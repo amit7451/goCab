@@ -24,6 +24,7 @@ API.interceptors.response.use(
     if (error.response?.status === 401) {
       localStorage.removeItem('gocab_token');
       localStorage.removeItem('gocab_user');
+      window.dispatchEvent(new Event('gocab:unauthorized'));
       const currentPath = window.location.pathname;
       if (currentPath !== '/login' && currentPath !== '/register' && currentPath !== '/') {
         window.location.href = '/login';

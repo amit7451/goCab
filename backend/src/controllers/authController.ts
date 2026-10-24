@@ -4,6 +4,13 @@ import { Types } from 'mongoose';
 import User from '../models/User';
 import Driver from '../models/Driver';
 import { AuthRequest } from '../types';
+import {
+  isValidEmail,
+  isValidPassword,
+  isValidPhone,
+  sanitizeString,
+  validateVehicleCategories,
+} from '../utils/validators';
 
 const generateToken = (id: Types.ObjectId): string => {
   const secret = process.env.JWT_SECRET || 'gocab_default_jwt_secret';
@@ -21,28 +28,48 @@ export const register = async (req: Request, res: Response): Promise<void> => {
   try {
     const { name, email, password, phone, role, vehicleInfo, licenseNumber } = req.body;
 
-    if (!name || !email || !password || !phone) {
+    const cleanName = sanitizeString(name);
+    const cleanEmail = sanitizeString(email).toLowerCase();
+    const cleanPhone = sanitizeString(phone);
+    const cleanRole = role === 'driver' ? 'driver' : 'user';
+
+    if (!cleanName || !cleanEmail || !password || !cleanPhone) {
       res.status(400).json({ message: 'Name, email, password, and phone are required' });
       return;
     }
 
+    if (!isValidEmail(cleanEmail)) {
+      res.status(400).json({ message: 'Please provide a valid email address' });
+      return;
+    }
+
+    if (!isValidPassword(password)) {
+      res.status(400).json({ message: 'Password must be at least 6 characters long' });
+      return;
+    }
+
+    if (!isValidPhone(cleanPhone)) {
+      res.status(400).json({ message: 'Please provide a valid phone number' });
+      return;
+    }
+
     // Check if user already exists
-    const existingUser = await User.findOne({ email });
+    const existingUser = await User.findOne({ email: cleanEmail });
     if (existingUser) {
       res.status(400).json({ message: 'User with this email already exists' });
       return;
     }
 
     // Pre-validate driver fields if role is driver
-    if (role === 'driver') {
+    if (cleanRole === 'driver') {
       if (
         !vehicleInfo ||
-        !vehicleInfo.make ||
-        !vehicleInfo.model ||
-        !vehicleInfo.year ||
-        !vehicleInfo.licensePlate ||
-        !vehicleInfo.color ||
-        !licenseNumber
+        !sanitizeString(vehicleInfo.make) ||
+        !sanitizeString(vehicleInfo.model) ||
+        !Number(vehicleInfo.year) ||
+        !sanitizeString(vehicleInfo.licensePlate) ||
+        !sanitizeString(vehicleInfo.color) ||
+        !sanitizeString(licenseNumber)
       ) {
         res.status(400).json({
           message: 'Complete vehicle info and license number are required for driver registration',
@@ -50,7 +77,8 @@ export const register = async (req: Request, res: Response): Promise<void> => {
         return;
       }
 
-      const existingDriver = await Driver.findOne({ licenseNumber });
+      const cleanLicense = sanitizeString(licenseNumber).toUpperCase();
+      const existingDriver = await Driver.findOne({ licenseNumber: cleanLicense });
       if (existingDriver) {
         res.status(400).json({ message: 'Driver with this license number already exists' });
         return;
@@ -59,26 +87,29 @@ export const register = async (req: Request, res: Response): Promise<void> => {
 
     // Create user
     const user = await User.create({
-      name,
-      email,
+      name: cleanName,
+      email: cleanEmail,
       password,
-      phone,
-      role: role || 'user',
+      phone: cleanPhone,
+      role: cleanRole,
     });
     createdUserId = user._id;
 
-    // If registering as driver, create driver profile
-    if (role === 'driver') {
+    // If registering as driver, create driver profile with vehicle categories
+    if (cleanRole === 'driver') {
+      const categories = validateVehicleCategories(vehicleInfo.categories);
+
       await Driver.create({
         userId: user._id,
         vehicleInfo: {
-          make: vehicleInfo.make,
-          model: vehicleInfo.model,
+          make: sanitizeString(vehicleInfo.make),
+          model: sanitizeString(vehicleInfo.model),
           year: Number(vehicleInfo.year),
-          licensePlate: vehicleInfo.licensePlate,
-          color: vehicleInfo.color,
+          licensePlate: sanitizeString(vehicleInfo.licensePlate).toUpperCase(),
+          color: sanitizeString(vehicleInfo.color),
+          categories,
         },
-        licenseNumber,
+        licenseNumber: sanitizeString(licenseNumber).toUpperCase(),
       });
     }
 
@@ -121,13 +152,14 @@ export const register = async (req: Request, res: Response): Promise<void> => {
 export const login = async (req: Request, res: Response): Promise<void> => {
   try {
     const { email, password } = req.body;
+    const cleanEmail = sanitizeString(email).toLowerCase();
 
-    if (!email || !password) {
+    if (!cleanEmail || !password) {
       res.status(400).json({ message: 'Email and password are required' });
       return;
     }
 
-    const user = await User.findOne({ email });
+    const user = await User.findOne({ email: cleanEmail });
     if (!user) {
       res.status(401).json({ message: 'Invalid email or password' });
       return;

@@ -93,6 +93,10 @@ const rideSchema = new Schema<IRide>(
       type: Date,
       default: null,
     },
+    pickupOtpAttempts: {
+      type: Number,
+      default: 0,
+    },
     rideType: {
       type: String,
       enum: ['economy', 'comfort', 'premium'],

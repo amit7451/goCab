@@ -4,6 +4,7 @@ import API from '../api/axios';
 import toast from 'react-hot-toast';
 import { useAuth } from '../context/AuthContext';
 import { DriverProfile, Ride, RideStatus } from '../types';
+import { connectSocket } from '../utils/socket';
 
 const STATUS_LABEL: Record<string, string> = {
   accepted: 'Pick Up Passenger',
@@ -30,6 +31,7 @@ export default function DriverDashboard(): React.ReactElement {
   const [tab, setTab] = useState<DashboardTab>('available');
   const [actionLoading, setActionLoading] = useState<string>('');
   const [nowMs, setNowMs] = useState<number>(Date.now());
+  const [isLiveConnected, setIsLiveConnected] = useState<boolean>(false);
 
   const fetchAll = useCallback(async (): Promise<void> => {
     try {
@@ -52,6 +54,42 @@ export default function DriverDashboard(): React.ReactElement {
     fetchAll();
     const interval = setInterval(fetchAll, 6000);
     return () => clearInterval(interval);
+  }, [fetchAll]);
+
+  useEffect(() => {
+    const socket = connectSocket();
+    setIsLiveConnected(socket.connected);
+
+    const onConnect = () => setIsLiveConnected(true);
+    const onDisconnect = () => setIsLiveConnected(false);
+
+    socket.on('connect', onConnect);
+    socket.on('disconnect', onDisconnect);
+
+    const onNewOffer = () => {
+      toast.success('🚗 New ride request available!');
+      fetchAll();
+    };
+
+    const onPriceBoosted = () => {
+      fetchAll();
+    };
+
+    const onRideCancelled = () => {
+      fetchAll();
+    };
+
+    socket.on('ride:new_offer', onNewOffer);
+    socket.on('ride:price_boosted', onPriceBoosted);
+    socket.on('ride:cancelled', onRideCancelled);
+
+    return () => {
+      socket.off('connect', onConnect);
+      socket.off('disconnect', onDisconnect);
+      socket.off('ride:new_offer', onNewOffer);
+      socket.off('ride:price_boosted', onPriceBoosted);
+      socket.off('ride:cancelled', onRideCancelled);
+    };
   }, [fetchAll]);
 
   useEffect(() => {
@@ -116,10 +154,36 @@ export default function DriverDashboard(): React.ReactElement {
         {/* Header */}
         <div className="flex-between" style={{ marginBottom: 32 }}>
           <div className="page-header" style={{ marginBottom: 0 }}>
-            <h1>
-              Driver <span>Dashboard</span>
-            </h1>
-            <p>Welcome back, {user?.name?.split(' ')[0]}</p>
+            <div style={{ display: 'flex', alignItems: 'center', gap: 10, flexWrap: 'wrap' }}>
+              <h1 style={{ margin: 0 }}>
+                Driver <span>Dashboard</span>
+              </h1>
+              <span
+                style={{
+                  fontSize: 11,
+                  padding: '3px 8px',
+                  borderRadius: 20,
+                  fontWeight: 600,
+                  background: isLiveConnected ? 'rgba(34, 197, 94, 0.15)' : 'rgba(234, 179, 8, 0.15)',
+                  color: isLiveConnected ? '#22c55e' : '#eab308',
+                  border: `1px solid ${isLiveConnected ? 'rgba(34, 197, 94, 0.3)' : 'rgba(234, 179, 8, 0.3)'}`,
+                  display: 'inline-flex',
+                  alignItems: 'center',
+                  gap: 4,
+                }}
+              >
+                <span
+                  style={{
+                    width: 6,
+                    height: 6,
+                    borderRadius: '50%',
+                    background: isLiveConnected ? '#22c55e' : '#eab308',
+                  }}
+                />
+                {isLiveConnected ? 'Live Real-Time' : 'Polling'}
+              </span>
+            </div>
+            <p style={{ marginTop: 4 }}>Welcome back, {user?.name?.split(' ')[0]}</p>
           </div>
           {/* Online/Offline toggle */}
           {profile && (

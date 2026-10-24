@@ -31,14 +31,16 @@ A full-stack cab booking application built with **MongoDB, Express, React, and N
 
 ```
 GoCab/
-├── backend/                # Node.js + Express API + TypeScript
+├── backend/                # Node.js + Express API + TypeScript + Socket.IO
 │   ├── src/
-│   │   ├── server.ts       # Entry point
+│   │   ├── server.ts       # Entry point & HTTP server
 │   │   ├── config/db.ts    # MongoDB connection
 │   │   ├── models/         # User, Driver, Ride schemas & types
 │   │   ├── routes/         # Typed route declarations
 │   │   ├── controllers/    # Typed controller handlers
-│   │   ├── middleware/     # Typed JWT auth guard
+│   │   ├── middleware/     # Typed JWT auth guard & rate limiters
+│   │   ├── services/       # Real-time Socket.IO & ride lifecycle service
+│   │   ├── utils/          # Geo, pricing, and input validators
 │   │   └── types/          # Shared backend TypeScript definitions
 │   ├── dist/               # Compiled production JS output
 │   └── tsconfig.json       # Backend TypeScript config
@@ -46,9 +48,10 @@ GoCab/
 ├── frontend/               # React + Vite + TypeScript SPA
 │   ├── src/
 │   │   ├── api/axios.ts    # Typed Axios instance with auth headers
-│   │   ├── context/        # Typed Auth context
+│   │   ├── context/        # Typed Auth context with socket lifecycle
 │   │   ├── components/     # Typed Navbar, RideCard, ProtectedRoute
-│   │   ├── pages/          # Home, Login, Register, BookRide, MyRides, DriverDashboard
+│   │   ├── pages/          # Home, Login, Register, BookRide, MyRides, DriverDashboard, Live Tracking
+│   │   ├── utils/          # Socket.IO client and Google Maps loader
 │   │   └── types/          # Shared frontend TypeScript interfaces
 │   ├── vite.config.ts      # Vite TypeScript configuration
 │   └── tsconfig.json       # Frontend TypeScript config

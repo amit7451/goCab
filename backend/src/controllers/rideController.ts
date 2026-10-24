@@ -6,6 +6,12 @@ import { AuthRequest, RideType, PaymentMethod, ILocation, IRide } from '../types
 import { getFareQuotes, toPositiveNumber, toNonNegativeNumber } from '../utils/pricing';
 import { haversineDistanceKm, normalizePoint, isValidLatLng } from '../utils/geo';
 import { getRequestExpiryDate, expireRequestedRides } from '../services/rideLifecycleService';
+import {
+  emitRideRequested,
+  emitRidePriceAddonUpdated,
+  emitRideCancelled,
+  getIO,
+} from '../services/socketService';
 
 const randomDistanceKm = (): number => {
   const minKm = 2;
@@ -177,6 +183,9 @@ export const bookRide = async (req: AuthRequest, res: Response): Promise<void> =
     ride.calculateFare();
     await ride.save();
 
+    // Broadcast new ride offer to drivers in real time
+    emitRideRequested(ride);
+
     res.status(201).json({
       message: 'Ride booked successfully',
       ride,
@@ -237,6 +246,9 @@ export const updateRideAddon = async (req: AuthRequest, res: Response): Promise<
     ride.calculateFare();
     await ride.save();
 
+    // Broadcast price boost to drivers and user in real time
+    emitRidePriceAddonUpdated(ride);
+
     res.json({
       message: 'Ride price updated successfully',
       ride,
@@ -296,6 +308,16 @@ export const updateUserLiveLocation = async (req: AuthRequest, res: Response): P
       updatedAt: new Date(),
     };
     await ride.save();
+
+    // Broadcast user location update to driver in real time
+    const io = getIO();
+    io?.to(`ride:${ride._id.toString()}`).emit('user:location_changed', {
+      rideId: ride._id.toString(),
+      lat,
+      lng,
+      address,
+      updatedAt: new Date().toISOString(),
+    });
 
     res.json({ message: 'User location updated', ride });
   } catch (error: any) {
@@ -364,13 +386,33 @@ export const getRideById = async (req: AuthRequest, res: Response): Promise<void
 
     const rideUserId = (ride.userId as any)?._id || ride.userId;
     const isOwner = rideUserId.toString() === req.user._id.toString();
-    const isDriver = req.user.role === 'driver';
-    if (!isOwner && !isDriver) {
+
+    let isAuthorizedDriver = false;
+    if (req.user.role === 'driver') {
+      const driver = await Driver.findOne({ userId: req.user._id });
+      if (driver) {
+        const isAssigned =
+          ride.driverId &&
+          ((ride.driverId as any)?._id || ride.driverId).toString() === driver._id.toString();
+
+        const isUnassignedOffer =
+          ride.status === 'requested' &&
+          !ride.driverId &&
+          ride.requestExpiresAt &&
+          ride.requestExpiresAt.getTime() > Date.now();
+
+        if (isAssigned || isUnassignedOffer) {
+          isAuthorizedDriver = true;
+        }
+      }
+    }
+
+    if (!isOwner && !isAuthorizedDriver) {
       res.status(403).json({ message: 'Not authorized to view this ride' });
       return;
     }
 
-    if (isDriver) {
+    if (isAuthorizedDriver) {
       res.json({ ride: sanitizeRideForDriver(ride) });
       return;
     }
@@ -430,6 +472,9 @@ export const cancelRide = async (req: AuthRequest, res: Response): Promise<void>
         console.error('Failed to restore driver availability on cancel:', driverErr);
       }
     }
+
+    // Broadcast cancellation to all rooms in real time
+    emitRideCancelled(ride);
 
     res.json({ message: 'Ride cancelled successfully', ride });
   } catch (error: any) {

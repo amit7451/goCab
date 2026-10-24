@@ -1,3 +1,4 @@
+import http from 'http';
 import express, { Request, Response, NextFunction } from 'express';
 import cors from 'cors';
 import dotenv from 'dotenv';
@@ -7,11 +8,16 @@ import rideRoutes from './routes/rideRoutes';
 import driverRoutes from './routes/driverRoutes';
 import mapsRoutes from './routes/mapsRoutes';
 import { expireRequestedRides } from './services/rideLifecycleService';
+import { initSocketServer } from './services/socketService';
 
 dotenv.config();
 connectDB();
 
 const app = express();
+const httpServer = http.createServer(app);
+
+// Initialize real-time Socket.IO server with JWT authentication
+initSocketServer(httpServer);
 
 app.use(
   cors({
@@ -40,7 +46,7 @@ app.use((err: any, _req: Request, res: Response, _next: NextFunction) => {
 });
 
 const PORT = process.env.PORT || 5000;
-app.listen(PORT, () => {
+httpServer.listen(PORT, () => {
   console.log(`🚕 GoCab server running on port ${PORT}`);
 });
 
@@ -49,4 +55,5 @@ setInterval(() => {
   expireRequestedRides().catch(() => {});
 }, 15000);
 
+export { app, httpServer };
 export default app;

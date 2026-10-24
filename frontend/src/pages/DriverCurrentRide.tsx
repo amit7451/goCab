@@ -4,6 +4,12 @@ import toast from 'react-hot-toast';
 import API from '../api/axios';
 import { loadGoogleMapsApi } from '../utils/googleMaps';
 import { DriverProfile, Ride } from '../types';
+import {
+  connectSocket,
+  joinRideRoom,
+  leaveRideRoom,
+  sendDriverLocation,
+} from '../utils/socket';
 
 const INDIA_CENTER = { lat: 20.5937, lng: 78.9629 };
 
@@ -26,9 +32,31 @@ const markerCircle = (maps: any, color: string, scale = 9) => ({
   scale,
 });
 
+const distanceInMeters = (
+  p1: { lat: number; lng: number },
+  p2: { lat: number; lng: number }
+): number => {
+  const R = 6371e3;
+  const φ1 = (p1.lat * Math.PI) / 180;
+  const φ2 = (p2.lat * Math.PI) / 180;
+  const Δφ = ((p2.lat - p1.lat) * Math.PI) / 180;
+  const Δλ = ((p2.lng - p1.lng) * Math.PI) / 180;
+  const a =
+    Math.sin(Δφ / 2) * Math.sin(Δφ / 2) +
+    Math.cos(φ1) * Math.cos(φ2) * Math.sin(Δλ / 2) * Math.sin(Δλ / 2);
+  const c = 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1 - a));
+  return R * c;
+};
+
 interface NavigationInfo {
   distanceText: string;
   durationText: string;
+}
+
+interface CachedRoute {
+  origin: { lat: number; lng: number };
+  target: { lat: number; lng: number };
+  status: string;
 }
 
 export default function DriverCurrentRide(): React.ReactElement {
@@ -37,6 +65,11 @@ export default function DriverCurrentRide(): React.ReactElement {
   const [profile, setProfile] = useState<DriverProfile | null>(null);
   const [myRides, setMyRides] = useState<Ride[]>([]);
   const [driverLocation, setDriverLocation] = useState<{ lat: number; lng: number } | null>(null);
+  const [passengerLiveLocation, setPassengerLiveLocation] = useState<{
+    lat: number;
+    lng: number;
+  } | null>(null);
+  const [isSocketConnected, setIsSocketConnected] = useState(false);
   const [navigationInfo, setNavigationInfo] = useState<NavigationInfo | null>(null);
   const [mapsReady, setMapsReady] = useState(false);
   const [mapsError, setMapsError] = useState('');
@@ -56,6 +89,7 @@ export default function DriverCurrentRide(): React.ReactElement {
   const watchIdRef = useRef<number | null>(null);
   const lastLocationSyncRef = useRef<number>(0);
   const mapTypeRef = useRef<string>('roadmap');
+  const lastRouteRef = useRef<CachedRoute | null>(null);
 
   const activeRide = useMemo(
     () => myRides.find((ride) => ['accepted', 'in_progress'].includes(ride.status)),
@@ -71,10 +105,11 @@ export default function DriverCurrentRide(): React.ReactElement {
   const routeTarget = useMemo(() => {
     if (!activeRide) return null;
     if (isPrePickupPhase) {
+      if (passengerLiveLocation) return passengerLiveLocation;
       return activeRide.pickup;
     }
     return activeRide.dropoff;
-  }, [activeRide, isPrePickupPhase]);
+  }, [activeRide, isPrePickupPhase, passengerLiveLocation]);
 
   const routeOrigin = useMemo(() => {
     if (isValidCoords(driverLocation)) return driverLocation;
@@ -103,11 +138,60 @@ export default function DriverCurrentRide(): React.ReactElement {
     }
   }, [driverLocation]);
 
+  // Polling fallback every 6 seconds
   useEffect(() => {
     fetchData();
-    const interval = setInterval(fetchData, 5000);
+    const interval = setInterval(fetchData, 6000);
     return () => clearInterval(interval);
   }, [fetchData]);
+
+  // Socket.IO real-time event subscriptions
+  useEffect(() => {
+    const socket = connectSocket();
+    setIsSocketConnected(socket.connected);
+
+    const onConnect = () => setIsSocketConnected(true);
+    const onDisconnect = () => setIsSocketConnected(false);
+
+    socket.on('connect', onConnect);
+    socket.on('disconnect', onDisconnect);
+
+    if (activeRide?._id) {
+      joinRideRoom(activeRide._id);
+    }
+
+    const onUserLocationChanged = (payload: any) => {
+      if (isValidCoords(payload)) {
+        setPassengerLiveLocation({ lat: payload.lat, lng: payload.lng });
+      }
+    };
+
+    const onRideCancelled = () => {
+      toast.error('The passenger cancelled this trip');
+      fetchData();
+    };
+
+    const onRideStatusChanged = (payload: any) => {
+      if (payload?.status) {
+        fetchData();
+      }
+    };
+
+    socket.on('user:location_changed', onUserLocationChanged);
+    socket.on('ride:cancelled', onRideCancelled);
+    socket.on('ride:status_changed', onRideStatusChanged);
+
+    return () => {
+      if (activeRide?._id) {
+        leaveRideRoom(activeRide._id);
+      }
+      socket.off('connect', onConnect);
+      socket.off('disconnect', onDisconnect);
+      socket.off('user:location_changed', onUserLocationChanged);
+      socket.off('ride:cancelled', onRideCancelled);
+      socket.off('ride:status_changed', onRideStatusChanged);
+    };
+  }, [activeRide?._id, fetchData]);
 
   const reverseGeocode = useCallback(
     (coords: { lat: number; lng: number }): Promise<string> =>
@@ -123,6 +207,10 @@ export default function DriverCurrentRide(): React.ReactElement {
 
   const syncDriverLocation = useCallback(
     async (coords: { lat: number; lng: number }) => {
+      // Real-time socket broadcast immediately
+      sendDriverLocation(activeRide?._id, coords);
+
+      // HTTP persistence throttled to 10s
       const now = Date.now();
       if (now - lastLocationSyncRef.current < 10000) return;
       lastLocationSyncRef.current = now;
@@ -130,9 +218,10 @@ export default function DriverCurrentRide(): React.ReactElement {
       const address = await reverseGeocode(coords);
       await API.put('/driver/location', { lat: coords.lat, lng: coords.lng, address }).catch(() => null);
     },
-    [reverseGeocode]
+    [activeRide?._id, reverseGeocode]
   );
 
+  // Load Google Maps API
   useEffect(() => {
     let disposed = false;
 
@@ -152,7 +241,6 @@ export default function DriverCurrentRide(): React.ReactElement {
           mapTypeControl: true,
         });
 
-        geocoderRef.current = new maps.Geocoder();
         directionsServiceRef.current = new maps.DirectionsService();
         directionsRendererRef.current = new maps.DirectionsRenderer({
           map: mapRef.current,
@@ -163,6 +251,7 @@ export default function DriverCurrentRide(): React.ReactElement {
             strokeWeight: 6,
           },
         });
+        geocoderRef.current = new maps.Geocoder();
 
         setMapsReady(true);
       } catch (error: any) {
@@ -179,6 +268,7 @@ export default function DriverCurrentRide(): React.ReactElement {
     };
   }, []);
 
+  // GPS Watch Position & Real-time Location Broadcast
   useEffect(() => {
     if (!navigator.geolocation) return;
 
@@ -190,9 +280,7 @@ export default function DriverCurrentRide(): React.ReactElement {
     };
 
     const onError = (error: GeolocationPositionError) => {
-      if (error.code === error.PERMISSION_DENIED) {
-        setLocationPermissionDenied(true);
-      }
+      if (error.code === error.PERMISSION_DENIED) setLocationPermissionDenied(true);
     };
 
     navigator.geolocation.getCurrentPosition(onPosition, onError, {
@@ -214,6 +302,7 @@ export default function DriverCurrentRide(): React.ReactElement {
     };
   }, [syncDriverLocation]);
 
+  // Google Map Markers & Directions Rendering (with quota protection)
   useEffect(() => {
     const maps = (window as any).google?.maps;
     const map = mapRef.current;
@@ -235,6 +324,7 @@ export default function DriverCurrentRide(): React.ReactElement {
       directionsRendererRef.current?.set('directions', null);
       ['driver', 'pickup', 'dropoff', 'riderLive', 'target'].forEach(hideMarker);
       setNavigationInfo(null);
+      lastRouteRef.current = null;
       return;
     }
 
@@ -256,8 +346,9 @@ export default function DriverCurrentRide(): React.ReactElement {
         fontWeight: '700',
       });
     }
-    if (isValidCoords(activeRide.userLiveLocation)) {
-      setMarker('riderLive', toCoords(activeRide.userLiveLocation!), 'Passenger live', '#22c55e', {
+    const currentPassengerLoc = passengerLiveLocation || (isValidCoords(activeRide.userLiveLocation) ? toCoords(activeRide.userLiveLocation!) : null);
+    if (currentPassengerLoc) {
+      setMarker('riderLive', currentPassengerLoc, 'Passenger live', '#22c55e', {
         text: 'U',
         color: '#0b1220',
         fontWeight: '700',
@@ -280,28 +371,41 @@ export default function DriverCurrentRide(): React.ReactElement {
       return;
     }
 
-    directionsServiceRef.current.route(
-      {
-        origin: routeOrigin,
-        destination: toCoords(routeTarget!),
-        travelMode: maps.TravelMode.DRIVING,
-      },
-      (result: any, status: string) => {
-        if (status !== 'OK' || !result?.routes?.[0]?.legs?.[0]) {
-          setNavigationInfo(null);
-          return;
-        }
+    const targetCoords = toCoords(routeTarget!);
+    const prev = lastRouteRef.current;
+    const isSamePhase = prev && prev.status === activeRide.status;
+    const originShift = prev ? distanceInMeters(prev.origin, routeOrigin) : Infinity;
+    const targetShift = prev ? distanceInMeters(prev.target, targetCoords) : Infinity;
 
-        directionsRendererRef.current?.setDirections(result);
-        map.fitBounds(result.routes[0].bounds, 70);
-        const leg = result.routes[0].legs[0];
-        setNavigationInfo({
-          distanceText: leg.distance?.text || '',
-          durationText: leg.duration?.text || '',
-        });
-      }
-    );
-  }, [mapsReady, activeRide, routeTarget, routeOrigin, driverLocation, mapRefreshTick]);
+    if (!prev || !isSamePhase || originShift > 80 || targetShift > 80) {
+      directionsServiceRef.current.route(
+        {
+          origin: routeOrigin,
+          destination: targetCoords,
+          travelMode: maps.TravelMode.DRIVING,
+        },
+        (result: any, status: string) => {
+          if (status !== 'OK' || !result?.routes?.[0]?.legs?.[0]) {
+            setNavigationInfo(null);
+            return;
+          }
+
+          lastRouteRef.current = {
+            origin: routeOrigin,
+            target: targetCoords,
+            status: activeRide.status,
+          };
+          directionsRendererRef.current?.setDirections(result);
+          map.fitBounds(result.routes[0].bounds, 70);
+          const leg = result.routes[0].legs[0];
+          setNavigationInfo({
+            distanceText: leg.distance?.text || '',
+            durationText: leg.duration?.text || '',
+          });
+        }
+      );
+    }
+  }, [mapsReady, activeRide, routeTarget, routeOrigin, driverLocation, passengerLiveLocation, mapRefreshTick]);
 
   const verifyOtp = async () => {
     if (!activeRide?._id) return;
@@ -312,7 +416,7 @@ export default function DriverCurrentRide(): React.ReactElement {
     setOtpVerifying(true);
     try {
       await API.put(`/driver/verify-pickup-otp/${activeRide._id}`, { otp: otpInput.trim() });
-      toast.success('OTP verified');
+      toast.success('OTP verified! You can now start the trip.');
       setOtpInput('');
       await fetchData();
     } catch (error: any) {
@@ -373,10 +477,7 @@ export default function DriverCurrentRide(): React.ReactElement {
   };
 
   const refreshMap = () => {
-    if (!mapsReady) {
-      setMapRefreshTick((tick) => tick + 1);
-      return;
-    }
+    lastRouteRef.current = null;
     fetchLiveLocation();
     fetchData();
   };
@@ -426,9 +527,35 @@ export default function DriverCurrentRide(): React.ReactElement {
       <div className="container" style={{ maxWidth: 1200 }}>
         <div className="flex-between" style={{ marginBottom: 16, gap: 12, flexWrap: 'wrap' }}>
           <div className="page-header" style={{ marginBottom: 0 }}>
-            <h1>
-              Current <span>Ride</span>
-            </h1>
+            <div style={{ display: 'flex', alignItems: 'center', gap: 10, marginBottom: 4 }}>
+              <h1 style={{ margin: 0 }}>
+                Current <span>Ride</span>
+              </h1>
+              <span
+                style={{
+                  fontSize: 11,
+                  padding: '3px 8px',
+                  borderRadius: 20,
+                  fontWeight: 600,
+                  background: isSocketConnected ? 'rgba(34, 197, 94, 0.15)' : 'rgba(234, 179, 8, 0.15)',
+                  color: isSocketConnected ? '#22c55e' : '#eab308',
+                  border: `1px solid ${isSocketConnected ? 'rgba(34, 197, 94, 0.3)' : 'rgba(234, 179, 8, 0.3)'}`,
+                  display: 'inline-flex',
+                  alignItems: 'center',
+                  gap: 4,
+                }}
+              >
+                <span
+                  style={{
+                    width: 6,
+                    height: 6,
+                    borderRadius: '50%',
+                    background: isSocketConnected ? '#22c55e' : '#eab308',
+                  }}
+                />
+                {isSocketConnected ? 'Live Real-Time' : 'Polling'}
+              </span>
+            </div>
             <p>
               {isPrePickupPhase
                 ? 'Navigate to passenger pickup and verify OTP.'

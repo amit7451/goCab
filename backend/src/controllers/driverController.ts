@@ -6,6 +6,11 @@ import { AuthRequest, IDriver, IRide, RideStatus, RideType } from '../types';
 import { haversineDistanceKm, isValidLatLng } from '../utils/geo';
 import { expireRequestedRides } from '../services/rideLifecycleService';
 import { sanitizeRideForDriver } from './rideController';
+import {
+  emitRideAccepted,
+  emitRideStatusChanged,
+  getIO,
+} from '../services/socketService';
 
 const BASE_DISPATCH_RADIUS_KM = 8;
 const MAX_DISPATCH_RADIUS_KM = 16;
@@ -100,6 +105,13 @@ export const updateLocation = async (req: AuthRequest, res: Response): Promise<v
     }
 
     const { address, lat, lng } = req.body;
+    const numLat = Number(lat);
+    const numLng = Number(lng);
+
+    if (!isValidLatLng({ lat: numLat, lng: numLng })) {
+      res.status(400).json({ message: 'Valid coordinates (-90 to 90 lat, -180 to 180 lng) are required' });
+      return;
+    }
 
     const driver = await Driver.findOne({ userId: req.user._id });
     if (!driver) {
@@ -108,11 +120,28 @@ export const updateLocation = async (req: AuthRequest, res: Response): Promise<v
     }
 
     driver.currentLocation = {
-      address: address || '',
-      lat: typeof lat === 'number' ? lat : 0,
-      lng: typeof lng === 'number' ? lng : 0,
+      address: String(address || '').trim(),
+      lat: numLat,
+      lng: numLng,
     };
     await driver.save();
+
+    // Broadcast live location to any active ride in real time
+    const activeRide = await Ride.findOne({
+      driverId: driver._id,
+      status: { $in: ['accepted', 'in_progress'] },
+    });
+
+    if (activeRide) {
+      const io = getIO();
+      io?.to(`ride:${activeRide._id.toString()}`).emit('driver:location_changed', {
+        driverId: driver._id.toString(),
+        lat: numLat,
+        lng: numLng,
+        address: driver.currentLocation.address,
+        updatedAt: new Date().toISOString(),
+      });
+    }
 
     res.json({ message: 'Location updated', driver });
   } catch (error: any) {
@@ -285,6 +314,9 @@ export const acceptRide = async (req: AuthRequest, res: Response): Promise<void>
     driver.isAvailable = false;
     await driver.save();
 
+    // Broadcast real-time event so passenger and other drivers are updated immediately
+    emitRideAccepted(acceptedRide, driver);
+
     res.json({
       message: 'Ride accepted successfully',
       ride: sanitizeRideForDriver(acceptedRide),
@@ -345,14 +377,30 @@ export const verifyPickupOtp = async (req: AuthRequest, res: Response): Promise<
       return;
     }
 
+    if ((ride.pickupOtpAttempts || 0) >= 5) {
+      res.status(400).json({
+        message: 'Maximum OTP verification attempts (5) exceeded. Please ask passenger to cancel and rebook.',
+      });
+      return;
+    }
+
     if (!ride.pickupOtp || ride.pickupOtp !== otp) {
-      res.status(400).json({ message: 'Invalid OTP' });
+      ride.pickupOtpAttempts = (ride.pickupOtpAttempts || 0) + 1;
+      await ride.save();
+      const attemptsRemaining = Math.max(0, 5 - ride.pickupOtpAttempts);
+      res.status(400).json({
+        message: `Invalid OTP. ${attemptsRemaining} attempt(s) remaining.`,
+      });
       return;
     }
 
     ride.pickupOtpVerifiedAt = new Date();
     ride.pickupOtp = '';
+    ride.pickupOtpAttempts = 0;
     await ride.save();
+
+    // Notify passenger that OTP was verified
+    emitRideStatusChanged(ride, 'accepted', { otpVerified: true });
 
     res.json({
       message: 'Passenger verified successfully',
@@ -422,13 +470,17 @@ export const updateRideStatus = async (req: AuthRequest, res: Response): Promise
     }
     if (status === 'completed') {
       ride.endTime = new Date();
-      driver.isAvailable = true;
-      driver.totalRides = (driver.totalRides || 0) + 1;
-      driver.earnings = (driver.earnings || 0) + (ride.fare || 0);
-      await driver.save();
+      // Atomic increment and state change to prevent race conditions
+      await Driver.findByIdAndUpdate(driver._id, {
+        $set: { isAvailable: true },
+        $inc: { totalRides: 1, earnings: ride.fare || 0 },
+      });
     }
 
     await ride.save();
+
+    // Notify both rider and driver rooms of status progression
+    emitRideStatusChanged(ride, status, { fare: ride.fare });
 
     res.json({ message: `Ride marked as ${status}`, ride: sanitizeRideForDriver(ride) });
   } catch (error: any) {

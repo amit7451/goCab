@@ -10,6 +10,7 @@ import {
   getDriverRides,
 } from '../controllers/driverController';
 import { protect, requireRole } from '../middleware/authMiddleware';
+import { otpRateLimiter } from '../middleware/rateLimitMiddleware';
 
 const router = Router();
 
@@ -18,7 +19,7 @@ router.put('/availability', protect as any, requireRole('driver') as any, update
 router.put('/location', protect as any, requireRole('driver') as any, updateLocation as any);
 router.get('/available-rides', protect as any, requireRole('driver') as any, getAvailableRides as any);
 router.put('/accept-ride/:rideId', protect as any, requireRole('driver') as any, acceptRide as any);
-router.put('/verify-pickup-otp/:rideId', protect as any, requireRole('driver') as any, verifyPickupOtp as any);
+router.put('/verify-pickup-otp/:rideId', otpRateLimiter, protect as any, requireRole('driver') as any, verifyPickupOtp as any);
 router.put('/update-ride/:rideId', protect as any, requireRole('driver') as any, updateRideStatus as any);
 router.get('/my-rides', protect as any, requireRole('driver') as any, getDriverRides as any);
 

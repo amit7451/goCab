@@ -2,6 +2,7 @@ import { createContext, useContext, useState, useEffect, ReactNode } from 'react
 import API from '../api/axios';
 import toast from 'react-hot-toast';
 import { User, AuthContextType } from '../types';
+import { connectSocket, disconnectSocket } from '../utils/socket';
 
 const AuthContext = createContext<AuthContextType | null>(null);
 
@@ -10,7 +11,7 @@ export const AuthProvider = ({ children }: { children: ReactNode }) => {
   const [token, setToken] = useState<string | null>(null);
   const [loading, setLoading] = useState<boolean>(true);
 
-  // Load auth from localStorage on mount
+  // Load auth from localStorage on mount and connect socket
   useEffect(() => {
     try {
       const storedToken = localStorage.getItem('gocab_token');
@@ -19,6 +20,7 @@ export const AuthProvider = ({ children }: { children: ReactNode }) => {
       if (storedToken && storedUser) {
         setToken(storedToken);
         setUser(JSON.parse(storedUser));
+        connectSocket(storedToken);
       }
     } catch (err) {
       console.error('Failed to parse stored user data:', err);
@@ -27,6 +29,15 @@ export const AuthProvider = ({ children }: { children: ReactNode }) => {
     } finally {
       setLoading(false);
     }
+
+    const handleUnauthorized = () => {
+      setToken(null);
+      setUser(null);
+      disconnectSocket();
+    };
+
+    window.addEventListener('gocab:unauthorized', handleUnauthorized);
+    return () => window.removeEventListener('gocab:unauthorized', handleUnauthorized);
   }, []);
 
   const login = async (email: string, password: string): Promise<User> => {
@@ -38,6 +49,7 @@ export const AuthProvider = ({ children }: { children: ReactNode }) => {
 
     setToken(newToken);
     setUser(newUser);
+    connectSocket(newToken);
 
     return newUser;
   };
@@ -51,6 +63,7 @@ export const AuthProvider = ({ children }: { children: ReactNode }) => {
 
     setToken(newToken);
     setUser(newUser);
+    connectSocket(newToken);
 
     return newUser;
   };
@@ -60,6 +73,7 @@ export const AuthProvider = ({ children }: { children: ReactNode }) => {
     localStorage.removeItem('gocab_user');
     setToken(null);
     setUser(null);
+    disconnectSocket();
     toast.success('Logged out successfully');
   };
 
